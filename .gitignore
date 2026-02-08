@@ -1,3 +1,4 @@
+# Rails (from GitHub Rails.gitignore)
 *.rbc
 capybara-*.html
 .rspec
@@ -17,53 +18,72 @@ pickle-email-*.html
 !/log/.keep
 !/tmp/.keep
 
-# TODO Comment out this rule if you are OK with secrets being uploaded to the repo
-config/initializers/secret_token.rb
+# Rails credentials / secrets
 config/master.key
-
-# Only include if you have production secrets in this file, which is no longer a Rails default
+# Legacy secret token file (older Rails apps)
+config/initializers/secret_token.rb
 # config/secrets.yml
 
-# dotenv, dotenv-rails
-# TODO Comment out these rules if environment variables can be committed
+# dotenv / local environment files
 .env
-.env*.local
+.env.*
+!.env.example
 
-## Environment normalization:
+# Bundler / Ruby environment normalization
 /.bundle
 /vendor/bundle
-
-# these should all be checked in to normalize the environment:
-# Gemfile.lock, .ruby-version, .ruby-gemset
-
-# unless supporting rvm < 1.11.0 or doing something fancy, ignore this:
 .rvmrc
 
-# if using bower-rails ignore default bower_components path bower.json files
+# Frontend / asset tooling
+node_modules/
 /vendor/assets/bower_components
 *.bowerrc
 bower.json
-
-# Ignore pow environment settings
-.powenv
-
-# Ignore Byebug command history file.
-.byebug_history
-
-# Ignore node_modules
-node_modules/
-
-# Ignore precompiled javascript packs
 /public/packs
 /public/packs-test
 /public/assets
-
-# Ignore yarn files
 /yarn-error.log
 yarn-debug.log*
 .yarn-integrity
 
-# Ignore uploaded files in development
+# Dev uploads and local runtime artifacts
 /storage/*
 !/storage/.keep
 /public/uploads
+.powenv
+.byebug_history
+
+# JetBrains / RubyMine
+.idea/
+*.iml
+*.iws
+out/
+.idea_modules/
+cmake-build-*/
+atlassian-ide-plugin.xml
+com_crashlytics_export_strings.xml
+crashlytics.properties
+crashlytics-build.properties
+fabric.properties
+.idea/httpRequests
+http-client.private.env.json
+
+# Optional editor configs
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+
+# Local tooling / caches
+.history/
+.localhistory/
+work-items/
+ui-audit-screenshots/
+.local/pki/
+.codex
+/docs
+
+# OS files
+.DS_Store
