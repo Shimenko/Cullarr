@@ -83,7 +83,7 @@ work-items/
 ui-audit-screenshots/
 .local/pki/
 .codex
-/docs
+/docs/
 
 # OS files
 .DS_Store
