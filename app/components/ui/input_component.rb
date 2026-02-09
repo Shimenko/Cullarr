@@ -74,6 +74,6 @@ class Ui::InputComponent < Ui::BaseComponent
   end
 
   def generated_id
-    name.downcase.gsub(/[^a-z0-9]+/, "_").gsub(/\A_+|_+\z/, "")
+    unique_dom_id(name)
   end
 end

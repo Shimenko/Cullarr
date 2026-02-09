@@ -41,7 +41,7 @@ class Ui::ButtonComponent < Ui::BaseComponent
     )
 
     if href.present?
-      base_attributes.merge(href:, tabindex: disabled ? "-1" : nil)
+      base_attributes.merge(href: disabled ? nil : href, tabindex: disabled ? "-1" : nil)
     else
       base_attributes.merge(type:, disabled: disabled ? true : nil)
     end

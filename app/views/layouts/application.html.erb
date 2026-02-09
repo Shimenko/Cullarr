@@ -3,6 +3,7 @@
   <head>
     <title><%= content_for(:title) || "Cullarr" %></title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="dark light">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
     <%= csrf_meta_tags %>
@@ -12,6 +13,58 @@
 
     <%# Enable PWA manifest for installable apps (make sure to enable in config/routes.rb too!) %>
     <%#= tag.link rel: "manifest", href: pwa_manifest_path(format: :json) %>
+
+    <script>
+      (() => {
+        const DARK_CLASS = "theme-signal-dark"
+        const LIGHT_CLASS = "theme-signal-light"
+        const STORAGE_KEY = "cullarr-theme"
+        const mediaQuery = window.matchMedia?.("(prefers-color-scheme: dark)")
+
+        const storedTheme = () => {
+          try {
+            const theme = window.localStorage.getItem(STORAGE_KEY)
+            return theme === "dark" || theme === "light" ? theme : null
+          } catch (_error) {
+            return null
+          }
+        }
+
+        const resolvedTheme = () => {
+          const theme = storedTheme()
+          if (theme) return theme
+          return mediaQuery?.matches ? "dark" : "light"
+        }
+
+        const applyTheme = (theme) => {
+          const className = theme === "dark" ? DARK_CLASS : LIGHT_CLASS
+          document.documentElement.classList.remove(DARK_CLASS, LIGHT_CLASS)
+          document.documentElement.classList.add(className)
+          document.documentElement.style.colorScheme = theme
+          if (document.body) {
+            document.body.classList.remove(DARK_CLASS, LIGHT_CLASS)
+            document.body.classList.add(className)
+          }
+        }
+
+        applyTheme(resolvedTheme())
+        document.addEventListener("DOMContentLoaded", () => applyTheme(resolvedTheme()))
+
+        if (mediaQuery) {
+          const syncToSystem = () => {
+            if (!storedTheme()) {
+              applyTheme(resolvedTheme())
+            }
+          }
+
+          if (typeof mediaQuery.addEventListener === "function") {
+            mediaQuery.addEventListener("change", syncToSystem)
+          } else if (typeof mediaQuery.addListener === "function") {
+            mediaQuery.addListener(syncToSystem)
+          }
+        }
+      })()
+    </script>
 
     <%= favicon_link_tag "icon.png", type: "image/png" %>
     <%= favicon_link_tag "icon.svg", type: "image/svg+xml" %>
@@ -30,7 +83,7 @@
     <%= javascript_importmap_tags %>
   </head>
 
-  <body class="theme-signal-dark ui-app">
+  <body class="ui-app">
     <header class="ui-topbar">
       <div class="ui-topbar-inner">
         <div class="flex items-center gap-6">
@@ -53,10 +106,14 @@
 
     <main class="ui-shell-container ui-main">
       <% flash.each do |key, message| %>
-        <%= render Ui::InlineAlertComponent.new(
-          message: message,
-          kind: Ui::InlineAlertComponent.kind_for_flash_key(key)
-        ) %>
+        <% flash_classes = [ "ui-main-flash" ] %>
+        <% flash_classes << "ui-main-flash-auth" unless operator_signed_in? %>
+        <div class="<%= flash_classes.join(" ") %>">
+          <%= render Ui::InlineAlertComponent.new(
+            message: message,
+            kind: Ui::InlineAlertComponent.kind_for_flash_key(key)
+          ) %>
+        </div>
       <% end %>
 
       <%= yield %>

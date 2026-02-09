@@ -20,6 +20,7 @@
   --danger: 0 84% 60%;
   --info: 200 90% 55%;
   --focus: 166 72% 45%;
+  --shadow: 220 52% 2%;
 }
 
 .theme-signal-light {
@@ -43,6 +44,7 @@
   --danger: 0 72% 48%;
   --info: 200 78% 40%;
   --focus: 166 68% 32%;
+  --shadow: 215 24% 24%;
 }
 
 .ui-text-primary {

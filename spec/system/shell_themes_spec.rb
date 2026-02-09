@@ -20,11 +20,13 @@ RSpec.describe "ShellThemes", type: :system do
     click_button "Sign In"
   end
 
-  it "applies the default dark theme and keeps shell navigation visible after sign in" do
+  it "renders the shell navigation and includes client-side theme sync hooks after sign in", :aggregate_failures do
     create_operator!
     sign_in!
 
-    expect(page).to have_css("body.theme-signal-dark.ui-app")
+    expect(page).to have_css("body.ui-app")
+    expect(page.html).to include("prefers-color-scheme: dark")
+    expect(page.html).to include("cullarr-theme")
     expect(page).to have_css("header.ui-topbar")
     expect(page).to have_link("Dashboard")
     expect(page).to have_link("Settings")

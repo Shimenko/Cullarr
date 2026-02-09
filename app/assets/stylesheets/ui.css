@@ -47,6 +47,19 @@
   padding-inline: 1.5rem;
 }
 
+.ui-main-flash {
+  margin-bottom: 1.25rem;
+}
+
+.ui-main-flash .ui-inline-alert {
+  width: 100%;
+}
+
+.ui-main-flash-auth {
+  margin-inline: auto;
+  max-width: 28rem;
+}
+
 .ui-panel {
   background-color: hsl(var(--panel));
   border: 1px solid hsl(var(--border));
@@ -109,6 +122,16 @@
   min-height: 2.5rem;
   padding: 0.5rem 0.875rem;
   text-decoration: none;
+}
+
+.ui-button:disabled,
+.ui-button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.ui-button[aria-disabled="true"] {
+  pointer-events: none;
 }
 
 .ui-button:focus-visible,

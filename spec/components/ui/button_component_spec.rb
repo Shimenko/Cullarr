@@ -21,9 +21,17 @@ RSpec.describe Ui::ButtonComponent, type: :component do
     fragment = render_inline(described_class.new(label: "Settings", href: "/settings", disabled: true))
     link = fragment.css("a").first
 
-    expect(link["href"]).to eq("/settings")
+    expect(link["href"]).to be_nil
     expect(link["aria-disabled"]).to eq("true")
     expect(link["tabindex"]).to eq("-1")
+  end
+
+  it "keeps href for enabled link buttons" do
+    fragment = render_inline(described_class.new(label: "Settings", href: "/settings"))
+    link = fragment.css("a").first
+
+    expect(link["href"]).to eq("/settings")
+    expect(link["aria-disabled"]).to be_nil
   end
 
   it "raises for unsupported variant" do

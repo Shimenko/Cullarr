@@ -30,4 +30,15 @@ class Ui::BaseComponent < ViewComponent::Base
   def merge_classes(*tokens)
     tokens.flatten.compact.flat_map { |token| token.to_s.split(/\s+/) }.reject(&:empty?).uniq.join(" ")
   end
+
+  def unique_dom_id(base_name, suffix: nil)
+    normalized_name = base_name.to_s.downcase.gsub(/[^a-z0-9]+/, "_").gsub(/\A_+|_+\z/, "")
+    normalized_name = "field" if normalized_name.empty?
+
+    [ normalized_name, suffix.presence, instance_id_suffix ].compact.join("_")
+  end
+
+  def instance_id_suffix
+    @instance_id_suffix ||= object_id.to_s(36)
+  end
 end

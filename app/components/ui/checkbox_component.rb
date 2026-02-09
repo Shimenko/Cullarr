@@ -48,6 +48,6 @@ class Ui::CheckboxComponent < Ui::BaseComponent
   end
 
   def generated_id
-    "#{name.downcase.gsub(/[^a-z0-9]+/, "_")}_checkbox"
+    unique_dom_id(name, suffix: "checkbox")
   end
 end

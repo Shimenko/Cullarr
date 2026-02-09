@@ -47,6 +47,6 @@ class Ui::SwitchComponent < Ui::BaseComponent
   end
 
   def generated_id
-    "#{name.downcase.gsub(/[^a-z0-9]+/, "_")}_switch"
+    unique_dom_id(name, suffix: "switch")
   end
 end

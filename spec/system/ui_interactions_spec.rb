@@ -33,10 +33,17 @@ RSpec.describe "UiInteractions", type: :system do
     page.execute_script(<<~JS, hold_button.native, milliseconds)
       const element = arguments[0]
       const duration = arguments[1]
-      element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }))
+      const dispatch = (eventName) => {
+        element.dispatchEvent(new MouseEvent(eventName, { bubbles: true, cancelable: true, button: 0 }))
+      }
+
+      dispatch("pointerdown")
+      dispatch("mousedown")
+
       if (duration !== null) {
         setTimeout(() => {
-          element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 }))
+          dispatch("pointerup")
+          dispatch("mouseup")
         }, duration)
       }
     JS
@@ -48,24 +55,21 @@ RSpec.describe "UiInteractions", type: :system do
     sign_in_operator!
     visit "/ui"
 
-    hold_button = press_hold_button_for(milliseconds: nil)
+    press_hold_button_for(milliseconds: nil)
 
-    sleep 0.45
-
-    expect(hold_button["data-hold-to-confirm-state"]).to eq("confirmed")
-    expect(hold_button).to have_text("Confirmed")
+    expect(page).to have_css("[data-testid='hold-to-confirm-demo'][data-hold-to-confirm-state='confirmed']", wait: 1.2)
+    expect(page).to have_css("[data-testid='hold-to-confirm-demo'] .ui-button-label", text: "Confirmed")
   end
 
   it "cancels hold-to-confirm when released before duration" do
     sign_in_operator!
     visit "/ui"
 
-    hold_button = press_hold_button_for(milliseconds: 120)
+    press_hold_button_for(milliseconds: 120)
 
-    sleep 0.25
-
-    expect(hold_button["data-hold-to-confirm-state"]).to eq("idle")
-    expect(hold_button).to have_text("Hold to confirm")
+    expect(page).to have_css("[data-testid='hold-to-confirm-demo'][data-hold-to-confirm-state='holding']", wait: 0.5)
+    expect(page).to have_css("[data-testid='hold-to-confirm-demo'][data-hold-to-confirm-state='idle']", wait: 1.0)
+    expect(page).to have_css("[data-testid='hold-to-confirm-demo'] .ui-button-label", text: "Hold to confirm")
   end
 
   it "shows copy feedback after clipboard action" do
