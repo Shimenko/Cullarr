@@ -19,8 +19,11 @@ RSpec.describe "Sessions", type: :request do
     operator = Operator.create!(email: "owner@example.com", password: "password123", password_confirmation: "password123")
 
     post "/session", params: { session: { email: operator.email, password: "password123" } }
+    follow_redirect!
 
-    expect(response).to redirect_to("/")
+    expect(response).to have_http_status(:ok)
+    expect(response.body).to include("Signed in.")
+    expect(response.body).to include("ui-flash ui-flash-notice")
   end
 
   it "rejects invalid credentials" do
@@ -30,5 +33,6 @@ RSpec.describe "Sessions", type: :request do
 
     expect(response).to have_http_status(:unprocessable_content)
     expect(response.body).to include("Invalid email or password")
+    expect(response.body).to include("ui-flash ui-flash-alert")
   end
 end

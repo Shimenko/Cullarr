@@ -1,0 +1,73 @@
+:root {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+}
+
+.ui-app {
+  font-family: var(--font-sans);
+}
+
+.ui-code,
+code,
+kbd,
+pre {
+  font-family: var(--font-mono);
+}
+
+.ui-text-display {
+  font-size: 2rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 2.5rem;
+}
+
+.ui-text-h1 {
+  font-size: 1.75rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 2.25rem;
+}
+
+.ui-text-h2 {
+  font-size: 1.375rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 2rem;
+}
+
+.ui-text-h3 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1.75rem;
+}
+
+.ui-text-body {
+  font-size: 0.9375rem;
+  line-height: 1.5rem;
+}
+
+.ui-text-body-sm {
+  font-size: 0.875rem;
+  line-height: 1.375rem;
+}
+
+.ui-text-caption {
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1rem;
+}
+
+.ui-text-micro {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  line-height: 0.875rem;
+  text-transform: uppercase;
+}
+
+.ui-tabular {
+  font-variant-numeric: tabular-nums;
+}

@@ -14,6 +14,9 @@ RSpec.describe "Dashboard", type: :request do
     get "/dashboard"
 
     expect(response).to have_http_status(:ok)
+    expect(response.body).to include("theme-signal-dark")
     expect(response.body).to include("Dashboard")
+    expect(response.body).to include("Settings")
+    expect(response.body).to include("Runs")
   end
 end

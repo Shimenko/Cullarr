@@ -1,0 +1,8 @@
+:root {
+  --r-panel: 1rem;
+  --r-control: 0.75rem;
+  --r-chip: 9999px;
+  --r-thumb: 0.5rem;
+  --elevation-panel: 0 10px 28px hsl(222 50% 2% / 0.33);
+  --elevation-soft: 0 3px 10px hsl(222 50% 2% / 0.2);
+}

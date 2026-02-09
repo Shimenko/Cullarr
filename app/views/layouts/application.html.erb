@@ -17,37 +17,43 @@
     <%= favicon_link_tag "icon.svg", type: "image/svg+xml" %>
     <%= favicon_link_tag "icon.png", rel: "apple-touch-icon" %>
 
-    <%# Includes all stylesheet files in app/assets/stylesheets %>
+    <%# Explicitly include digest-resolved token stylesheets for Propshaft. %>
     <%= stylesheet_link_tag asset_path("application.css"),
                             asset_path("tailwind.css"),
+                            asset_path("tokens/colors.css"),
+                            asset_path("tokens/typography.css"),
+                            asset_path("tokens/shape.css"),
+                            asset_path("tokens/motion.css"),
+                            asset_path("tokens/shell.css"),
+                            asset_path("ui.css"),
                             "data-turbo-track": "reload" %>
     <%= javascript_importmap_tags %>
   </head>
 
-  <body>
-    <header class="border-b border-slate-200 bg-white">
-      <div class="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
+  <body class="theme-signal-dark ui-app">
+    <header class="ui-topbar">
+      <div class="ui-topbar-inner">
         <div class="flex items-center gap-6">
-          <h1 class="text-lg font-semibold text-slate-900">Cullarr</h1>
+          <h1 class="ui-brand">Cullarr</h1>
           <% if operator_signed_in? %>
-            <nav class="flex items-center gap-4 text-sm font-medium text-slate-700">
-              <%= link_to "Dashboard", dashboard_path, class: "hover:text-slate-900" %>
-              <%= link_to "Settings", settings_path, class: "hover:text-slate-900" %>
-              <%= link_to "Runs", runs_path, class: "hover:text-slate-900" %>
+            <nav class="ui-nav">
+              <%= link_to "Dashboard", dashboard_path, class: "ui-nav-link ui-motion" %>
+              <%= link_to "Settings", settings_path, class: "ui-nav-link ui-motion" %>
+              <%= link_to "Runs", runs_path, class: "ui-nav-link ui-motion" %>
             </nav>
           <% end %>
         </div>
         <% if operator_signed_in? %>
           <%= button_to "Sign out", session_path, method: :delete,
-                        class: "rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100" %>
+                        class: "ui-button ui-button-secondary ui-motion ui-motion-lift" %>
         <% end %>
       </div>
     </header>
 
-    <main class="mx-auto mt-8 w-full max-w-6xl px-6">
+    <main class="ui-shell-container ui-main">
       <% flash.each do |key, message| %>
-        <% alert_classes = key.to_s == "alert" ? "border-red-300 bg-red-50 text-red-700" : "border-emerald-300 bg-emerald-50 text-emerald-700" %>
-        <p class="mb-4 rounded-md border px-4 py-3 text-sm <%= alert_classes %>"><%= message %></p>
+        <% alert_classes = key.to_s == "alert" ? "ui-flash ui-flash-alert" : "ui-flash ui-flash-notice" %>
+        <p class="<%= alert_classes %>"><%= message %></p>
       <% end %>
 
       <%= yield %>

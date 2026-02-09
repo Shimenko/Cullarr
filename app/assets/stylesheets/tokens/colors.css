@@ -1,0 +1,176 @@
+:root,
+.theme-signal-dark {
+  --bg: 222 40% 6%;
+  --panel: 222 33% 9%;
+  --panel-2: 222 28% 12%;
+  --panel-3: 222 24% 15%;
+  --border: 222 18% 18%;
+  --border-strong: 222 18% 28%;
+
+  --text: 210 40% 96%;
+  --text-muted: 215 20% 74%;
+  --text-faint: 215 14% 58%;
+
+  --accent: 166 72% 45%;
+  --accent-contrast: 222 40% 6%;
+  --accent-2: 38 95% 55%;
+
+  --success: 150 62% 42%;
+  --warning: 38 95% 55%;
+  --danger: 0 84% 60%;
+  --info: 200 90% 55%;
+  --focus: 166 72% 45%;
+}
+
+.theme-signal-light {
+  --bg: 210 40% 98%;
+  --panel: 0 0% 100%;
+  --panel-2: 210 35% 96%;
+  --panel-3: 210 30% 92%;
+  --border: 215 20% 86%;
+  --border-strong: 215 22% 74%;
+
+  --text: 222 30% 12%;
+  --text-muted: 222 16% 32%;
+  --text-faint: 222 12% 44%;
+
+  --accent: 166 68% 32%;
+  --accent-contrast: 0 0% 100%;
+  --accent-2: 38 95% 45%;
+
+  --success: 150 55% 34%;
+  --warning: 38 95% 45%;
+  --danger: 0 72% 48%;
+  --info: 200 78% 40%;
+  --focus: 166 68% 32%;
+}
+
+.ui-text-primary {
+  color: hsl(var(--text));
+}
+
+.ui-text-muted {
+  color: hsl(var(--text-muted));
+}
+
+.ui-text-faint {
+  color: hsl(var(--text-faint));
+}
+
+.ui-surface {
+  background-color: hsl(var(--panel));
+}
+
+.ui-surface-2 {
+  background-color: hsl(var(--panel-2));
+}
+
+.ui-surface-3 {
+  background-color: hsl(var(--panel-3));
+}
+
+.ui-border {
+  border-color: hsl(var(--border));
+}
+
+.ui-border-strong {
+  border-color: hsl(var(--border-strong));
+}
+
+/*
+  Bridge existing Tailwind color utilities to semantic tokens.
+  This keeps pages token-driven while progressively migrating templates.
+*/
+.theme-signal-dark .bg-white,
+.theme-signal-light .bg-white {
+  background-color: hsl(var(--panel));
+}
+
+.theme-signal-dark .border-slate-200,
+.theme-signal-light .border-slate-200,
+.theme-signal-dark .border-slate-300,
+.theme-signal-light .border-slate-300 {
+  border-color: hsl(var(--border));
+}
+
+.theme-signal-dark .text-slate-900,
+.theme-signal-light .text-slate-900 {
+  color: hsl(var(--text));
+}
+
+.theme-signal-dark .text-slate-700,
+.theme-signal-light .text-slate-700,
+.theme-signal-dark .text-slate-600,
+.theme-signal-light .text-slate-600 {
+  color: hsl(var(--text-muted));
+}
+
+.theme-signal-dark .hover\:text-slate-900:hover,
+.theme-signal-light .hover\:text-slate-900:hover {
+  color: hsl(var(--text));
+}
+
+.theme-signal-dark .bg-slate-900,
+.theme-signal-light .bg-slate-900 {
+  background-color: hsl(var(--accent));
+}
+
+.theme-signal-dark .text-white,
+.theme-signal-light .text-white {
+  color: hsl(var(--accent-contrast));
+}
+
+.theme-signal-dark .hover\:bg-slate-800:hover,
+.theme-signal-light .hover\:bg-slate-800:hover {
+  background-color: hsl(var(--accent) / 0.85);
+}
+
+.theme-signal-dark .hover\:bg-slate-100:hover,
+.theme-signal-light .hover\:bg-slate-100:hover {
+  background-color: hsl(var(--panel-3));
+}
+
+.theme-signal-dark .border-red-300,
+.theme-signal-light .border-red-300 {
+  border-color: hsl(var(--danger) / 0.55);
+}
+
+.theme-signal-dark .bg-red-50,
+.theme-signal-light .bg-red-50 {
+  background-color: hsl(var(--danger) / 0.13);
+}
+
+.theme-signal-dark .text-red-700,
+.theme-signal-light .text-red-700 {
+  color: hsl(var(--danger));
+}
+
+.theme-signal-dark .border-amber-300,
+.theme-signal-light .border-amber-300 {
+  border-color: hsl(var(--warning) / 0.5);
+}
+
+.theme-signal-dark .bg-amber-50,
+.theme-signal-light .bg-amber-50 {
+  background-color: hsl(var(--warning) / 0.13);
+}
+
+.theme-signal-dark .text-amber-800,
+.theme-signal-light .text-amber-800 {
+  color: hsl(var(--warning));
+}
+
+.theme-signal-dark .border-emerald-300,
+.theme-signal-light .border-emerald-300 {
+  border-color: hsl(var(--success) / 0.5);
+}
+
+.theme-signal-dark .bg-emerald-50,
+.theme-signal-light .bg-emerald-50 {
+  background-color: hsl(var(--success) / 0.13);
+}
+
+.theme-signal-dark .text-emerald-700,
+.theme-signal-light .text-emerald-700 {
+  color: hsl(var(--success));
+}

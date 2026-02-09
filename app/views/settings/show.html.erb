@@ -2,74 +2,74 @@
 <% setting_value = ->(key) { settings.fetch(key).fetch(:value) } %>
 
 <section class="space-y-8">
-  <div class="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-    <h2 class="text-2xl font-semibold text-slate-900">Settings</h2>
-    <p class="mt-2 text-sm text-slate-600">
+  <div class="ui-panel p-6">
+    <h2 class="ui-heading">Settings</h2>
+    <p class="ui-copy mt-2">
       Runtime behavior settings are DB-managed. Secrets and destructive toggles stay env-managed.
     </p>
 
     <%= form_with url: settings_path, method: :patch, class: "mt-6 grid gap-4 md:grid-cols-2" do |form| %>
-      <label class="text-sm text-slate-700">
+      <label class="ui-copy">
         <span class="mb-1 block font-medium">Sync Interval (minutes)</span>
-        <%= number_field_tag "settings[sync_interval_minutes]", setting_value.call("sync_interval_minutes"), min: 1, max: 1440, autocomplete: "off", class: "w-full rounded border border-slate-300 px-3 py-2" %>
+        <%= number_field_tag "settings[sync_interval_minutes]", setting_value.call("sync_interval_minutes"), min: 1, max: 1440, autocomplete: "off", class: "ui-control ui-text-body-sm" %>
       </label>
 
-      <label class="text-sm text-slate-700">
+      <label class="ui-copy">
         <span class="mb-1 block font-medium">Sensitive Action Re-auth Window (minutes)</span>
-        <%= number_field_tag "settings[sensitive_action_reauthentication_window_minutes]", setting_value.call("sensitive_action_reauthentication_window_minutes"), min: 1, max: 1440, autocomplete: "off", class: "w-full rounded border border-slate-300 px-3 py-2" %>
+        <%= number_field_tag "settings[sensitive_action_reauthentication_window_minutes]", setting_value.call("sensitive_action_reauthentication_window_minutes"), min: 1, max: 1440, autocomplete: "off", class: "ui-control ui-text-body-sm" %>
       </label>
 
-      <label class="text-sm text-slate-700">
+      <label class="ui-copy">
         <span class="mb-1 block font-medium">Watched Mode</span>
-        <%= select_tag "settings[watched_mode]", options_for_select([ [ "Play count", "play_count" ], [ "Percent watched", "percent" ] ], setting_value.call("watched_mode")), class: "w-full rounded border border-slate-300 px-3 py-2" %>
+        <%= select_tag "settings[watched_mode]", options_for_select([ [ "Play count", "play_count" ], [ "Percent watched", "percent" ] ], setting_value.call("watched_mode")), class: "ui-control ui-text-body-sm" %>
       </label>
 
-      <label class="text-sm text-slate-700">
+      <label class="ui-copy">
         <span class="mb-1 block font-medium">Watched Percent Threshold</span>
-        <%= number_field_tag "settings[watched_percent_threshold]", setting_value.call("watched_percent_threshold"), min: 1, max: 100, autocomplete: "off", class: "w-full rounded border border-slate-300 px-3 py-2" %>
+        <%= number_field_tag "settings[watched_percent_threshold]", setting_value.call("watched_percent_threshold"), min: 1, max: 100, autocomplete: "off", class: "ui-control ui-text-body-sm" %>
       </label>
 
-      <label class="text-sm text-slate-700">
+      <label class="ui-copy">
         <span class="mb-1 block font-medium">In-Progress Min Offset (ms)</span>
-        <%= number_field_tag "settings[in_progress_min_offset_ms]", setting_value.call("in_progress_min_offset_ms"), min: 1, autocomplete: "off", class: "w-full rounded border border-slate-300 px-3 py-2" %>
+        <%= number_field_tag "settings[in_progress_min_offset_ms]", setting_value.call("in_progress_min_offset_ms"), min: 1, autocomplete: "off", class: "ui-control ui-text-body-sm" %>
       </label>
 
-      <label class="text-sm text-slate-700">
+      <label class="ui-copy">
         <span class="mb-1 block font-medium">Culled Tag Name</span>
-        <%= text_field_tag "settings[culled_tag_name]", setting_value.call("culled_tag_name"), autocomplete: "off", class: "w-full rounded border border-slate-300 px-3 py-2" %>
+        <%= text_field_tag "settings[culled_tag_name]", setting_value.call("culled_tag_name"), autocomplete: "off", class: "ui-control ui-text-body-sm" %>
       </label>
 
-      <label class="text-sm text-slate-700">
+      <label class="ui-copy">
         <span class="mb-1 block font-medium">Default Compatibility Mode</span>
-        <%= select_tag "settings[compatibility_mode_default]", options_for_select([ [ "Strict latest", "strict_latest" ], [ "Warn only read-only", "warn_only_read_only" ] ], setting_value.call("compatibility_mode_default")), class: "w-full rounded border border-slate-300 px-3 py-2" %>
+        <%= select_tag "settings[compatibility_mode_default]", options_for_select([ [ "Strict latest", "strict_latest" ], [ "Warn only read-only", "warn_only_read_only" ] ], setting_value.call("compatibility_mode_default")), class: "ui-control ui-text-body-sm" %>
       </label>
 
-      <label class="text-sm text-slate-700">
+      <label class="ui-copy">
         <span class="mb-1 block font-medium">Retention: Sync Runs (days)</span>
-        <%= number_field_tag "settings[retention_sync_runs_days]", setting_value.call("retention_sync_runs_days"), min: 1, max: 3650, autocomplete: "off", class: "w-full rounded border border-slate-300 px-3 py-2" %>
+        <%= number_field_tag "settings[retention_sync_runs_days]", setting_value.call("retention_sync_runs_days"), min: 1, max: 3650, autocomplete: "off", class: "ui-control ui-text-body-sm" %>
       </label>
 
-      <label class="text-sm text-slate-700">
+      <label class="ui-copy">
         <span class="mb-1 block font-medium">Retention: Deletion Runs (days)</span>
-        <%= number_field_tag "settings[retention_deletion_runs_days]", setting_value.call("retention_deletion_runs_days"), min: 1, max: 3650, autocomplete: "off", class: "w-full rounded border border-slate-300 px-3 py-2" %>
+        <%= number_field_tag "settings[retention_deletion_runs_days]", setting_value.call("retention_deletion_runs_days"), min: 1, max: 3650, autocomplete: "off", class: "ui-control ui-text-body-sm" %>
       </label>
 
-      <label class="text-sm text-slate-700">
+      <label class="ui-copy">
         <span class="mb-1 block font-medium">Retention: Audit Events (days, 0 = keep forever)</span>
-        <%= number_field_tag "settings[retention_audit_events_days]", setting_value.call("retention_audit_events_days"), min: 0, max: 36500, autocomplete: "off", class: "w-full rounded border border-slate-300 px-3 py-2" %>
+        <%= number_field_tag "settings[retention_audit_events_days]", setting_value.call("retention_audit_events_days"), min: 0, max: 36500, autocomplete: "off", class: "ui-control ui-text-body-sm" %>
       </label>
 
-      <label class="text-sm text-slate-700">
+      <label class="ui-copy">
         <span class="mb-1 block font-medium">Image Proxy Timeout (seconds)</span>
-        <%= number_field_tag "settings[image_proxy_timeout_seconds]", setting_value.call("image_proxy_timeout_seconds"), min: 1, max: 120, autocomplete: "off", class: "w-full rounded border border-slate-300 px-3 py-2" %>
+        <%= number_field_tag "settings[image_proxy_timeout_seconds]", setting_value.call("image_proxy_timeout_seconds"), min: 1, max: 120, autocomplete: "off", class: "ui-control ui-text-body-sm" %>
       </label>
 
-      <label class="text-sm text-slate-700">
+      <label class="ui-copy">
         <span class="mb-1 block font-medium">Image Proxy Max Bytes</span>
-        <%= number_field_tag "settings[image_proxy_max_bytes]", setting_value.call("image_proxy_max_bytes"), min: 65536, max: 52428800, autocomplete: "off", class: "w-full rounded border border-slate-300 px-3 py-2" %>
+        <%= number_field_tag "settings[image_proxy_max_bytes]", setting_value.call("image_proxy_max_bytes"), min: 65536, max: 52428800, autocomplete: "off", class: "ui-control ui-text-body-sm" %>
       </label>
 
-      <div class="rounded border border-slate-200 p-3 text-sm text-slate-700">
+      <div class="ui-surface-2 ui-border rounded-lg p-3 ui-copy">
         <%= hidden_field_tag "settings[sync_enabled]", "0" %>
         <label class="flex items-center gap-2">
           <%= check_box_tag "settings[sync_enabled]", "1", ActiveModel::Type::Boolean.new.cast(setting_value.call("sync_enabled")) %>
@@ -89,7 +89,7 @@
         </label>
       </div>
 
-      <div class="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+      <div class="ui-callout-warning">
         <%= hidden_field_tag "destructive_confirmations[retention_audit_events_days_zero]", "0" %>
         <label class="flex items-center gap-2">
           <%= check_box_tag "destructive_confirmations[retention_audit_events_days_zero]", "1", false %>
@@ -98,50 +98,50 @@
       </div>
 
       <div class="md:col-span-2">
-        <%= form.submit "Save Settings", class: "rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800" %>
+        <%= form.submit "Save Settings", class: "ui-button ui-button-primary ui-motion ui-motion-lift" %>
       </div>
     <% end %>
   </div>
 
-  <div class="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-    <h3 class="text-xl font-semibold text-slate-900">Security</h3>
-    <p class="mt-2 text-sm text-slate-600">
+  <div class="ui-panel p-6">
+    <h3 class="ui-subheading">Security</h3>
+    <p class="ui-copy mt-2">
       Re-authenticate before sensitive actions and rotate password here.
       Current unlock window: <%= setting_value.call("sensitive_action_reauthentication_window_minutes") %> minutes.
     </p>
 
     <div class="mt-4 grid gap-6 md:grid-cols-2">
       <%= form_with url: re_authenticate_security_path, method: :post, class: "space-y-3" do |form| %>
-        <h4 class="text-sm font-semibold text-slate-900">Re-authenticate</h4>
-        <label class="block text-sm text-slate-700">
+        <h4 class="ui-copy ui-text-primary font-semibold">Re-authenticate</h4>
+        <label class="ui-copy block">
           <span class="mb-1 block">Password</span>
-          <%= password_field_tag :password, nil, required: true, autocomplete: "current-password", class: "w-full rounded border border-slate-300 px-3 py-2" %>
+          <%= password_field_tag :password, nil, required: true, autocomplete: "current-password", class: "ui-control ui-text-body-sm" %>
         </label>
-        <%= form.submit "Re-authenticate", class: "rounded border border-slate-300 px-3 py-2 text-sm hover:bg-slate-100" %>
+        <%= form.submit "Re-authenticate", class: "ui-button ui-button-secondary ui-motion" %>
       <% end %>
 
       <%= form_with url: update_password_security_path, method: :patch, scope: :password, class: "space-y-3" do |form| %>
-        <h4 class="text-sm font-semibold text-slate-900">Change Password</h4>
-        <label class="block text-sm text-slate-700">
+        <h4 class="ui-copy ui-text-primary font-semibold">Change Password</h4>
+        <label class="ui-copy block">
           <span class="mb-1 block">Current Password</span>
-          <%= form.password_field :current_password, required: true, autocomplete: "current-password", class: "w-full rounded border border-slate-300 px-3 py-2" %>
+          <%= form.password_field :current_password, required: true, autocomplete: "current-password", class: "ui-control ui-text-body-sm" %>
         </label>
-        <label class="block text-sm text-slate-700">
+        <label class="ui-copy block">
           <span class="mb-1 block">New Password</span>
-          <%= form.password_field :password, required: true, autocomplete: "new-password", class: "w-full rounded border border-slate-300 px-3 py-2" %>
+          <%= form.password_field :password, required: true, autocomplete: "new-password", class: "ui-control ui-text-body-sm" %>
         </label>
-        <label class="block text-sm text-slate-700">
+        <label class="ui-copy block">
           <span class="mb-1 block">Confirm New Password</span>
-          <%= form.password_field :password_confirmation, required: true, autocomplete: "new-password", class: "w-full rounded border border-slate-300 px-3 py-2" %>
+          <%= form.password_field :password_confirmation, required: true, autocomplete: "new-password", class: "ui-control ui-text-body-sm" %>
         </label>
-        <%= form.submit "Update Password", class: "rounded border border-slate-300 px-3 py-2 text-sm hover:bg-slate-100" %>
+        <%= form.submit "Update Password", class: "ui-button ui-button-secondary ui-motion" %>
       <% end %>
     </div>
   </div>
 
-  <div class="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-    <h3 class="text-xl font-semibold text-slate-900">Integrations</h3>
-    <p class="mt-2 text-sm text-slate-600">
+  <div class="ui-panel p-6">
+    <h3 class="ui-subheading">Integrations</h3>
+    <p class="ui-copy mt-2">
       Configure Sonarr, Radarr, and Tautulli endpoints and test compatibility.
       Integration host/network allowlists are env-managed through
       <code>CULLARR_ALLOWED_INTEGRATION_HOSTS</code> and
@@ -151,27 +151,27 @@
     </p>
 
     <%= form_with url: integrations_path, method: :post, scope: :integration, class: "mt-4 grid gap-3 md:grid-cols-3" do |form| %>
-      <label class="text-sm text-slate-700">
+      <label class="ui-copy">
         <span class="mb-1 block">Kind</span>
-        <%= form.select :kind, options_for_select(Integration.kinds.keys), {}, class: "w-full rounded border border-slate-300 px-3 py-2" %>
+        <%= form.select :kind, options_for_select(Integration.kinds.keys), {}, class: "ui-control ui-text-body-sm" %>
       </label>
-      <label class="text-sm text-slate-700">
+      <label class="ui-copy">
         <span class="mb-1 block">Name</span>
-        <%= form.text_field :name, required: true, autocomplete: "off", class: "w-full rounded border border-slate-300 px-3 py-2" %>
+        <%= form.text_field :name, required: true, autocomplete: "off", class: "ui-control ui-text-body-sm" %>
       </label>
-      <label class="text-sm text-slate-700">
+      <label class="ui-copy">
         <span class="mb-1 block">Base URL</span>
-        <%= form.text_field :base_url, required: true, placeholder: "https://sonarr.local", autocomplete: "url", class: "w-full rounded border border-slate-300 px-3 py-2" %>
+        <%= form.text_field :base_url, required: true, placeholder: "https://sonarr.local", autocomplete: "url", class: "ui-control ui-text-body-sm" %>
       </label>
-      <label class="text-sm text-slate-700">
+      <label class="ui-copy">
         <span class="mb-1 block">API Key</span>
-        <%= form.password_field :api_key, required: true, autocomplete: "off", class: "w-full rounded border border-slate-300 px-3 py-2" %>
+        <%= form.password_field :api_key, required: true, autocomplete: "off", class: "ui-control ui-text-body-sm" %>
       </label>
-      <label class="text-sm text-slate-700">
+      <label class="ui-copy">
         <span class="mb-1 block">Compatibility Mode</span>
-        <%= select_tag "integration[settings][compatibility_mode]", options_for_select([ [ "Strict latest", "strict_latest" ], [ "Warn only read-only", "warn_only_read_only" ] ]), class: "w-full rounded border border-slate-300 px-3 py-2" %>
+        <%= select_tag "integration[settings][compatibility_mode]", options_for_select([ [ "Strict latest", "strict_latest" ], [ "Warn only read-only", "warn_only_read_only" ] ]), class: "ui-control ui-text-body-sm" %>
       </label>
-      <div class="text-sm text-slate-700">
+      <div class="ui-copy">
         <%= hidden_field_tag "integration[verify_ssl]", "0" %>
         <label class="mt-6 flex items-center gap-2">
           <%= check_box_tag "integration[verify_ssl]", "1", true %>
@@ -179,53 +179,53 @@
         </label>
       </div>
       <div class="md:col-span-3">
-        <%= form.submit "Add Integration", class: "rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800" %>
+        <%= form.submit "Add Integration", class: "ui-button ui-button-primary ui-motion ui-motion-lift" %>
       </div>
     <% end %>
 
     <div class="mt-6 space-y-4">
       <% @integrations.each do |integration| %>
-        <div class="rounded border border-slate-200 p-4">
+        <div class="ui-surface-2 ui-border rounded-lg p-4">
           <div class="flex items-center justify-between">
-            <h4 class="text-base font-semibold text-slate-900"><%= integration.name %> (<%= integration.kind %>)</h4>
-            <span class="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700"><%= integration.status %></span>
+            <h4 class="ui-copy ui-text-primary font-semibold"><%= integration.name %> (<%= integration.kind %>)</h4>
+            <span class="ui-chip"><%= integration.status %></span>
           </div>
-          <p class="mt-1 text-xs text-slate-600">API key saved: <%= integration.api_key_present? ? "yes" : "no" %></p>
+          <p class="ui-help mt-1">API key saved: <%= integration.api_key_present? ? "yes" : "no" %></p>
 
           <%= form_with model: integration, url: integration_path(integration), method: :patch, scope: :integration, class: "mt-3 grid gap-2 md:grid-cols-3" do |form| %>
-            <%= form.text_field :name, autocomplete: "off", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
-            <%= form.text_field :base_url, autocomplete: "url", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
-            <%= form.password_field :api_key, placeholder: "Leave blank to keep existing", autocomplete: "off", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
-            <%= select_tag "integration[settings][compatibility_mode]", options_for_select([ [ "Strict latest", "strict_latest" ], [ "Warn only read-only", "warn_only_read_only" ] ], integration.compatibility_mode), class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
+            <%= form.text_field :name, autocomplete: "off", class: "ui-control ui-text-body-sm" %>
+            <%= form.text_field :base_url, autocomplete: "url", class: "ui-control ui-text-body-sm" %>
+            <%= form.password_field :api_key, placeholder: "Leave blank to keep existing", autocomplete: "off", class: "ui-control ui-text-body-sm" %>
+            <%= select_tag "integration[settings][compatibility_mode]", options_for_select([ [ "Strict latest", "strict_latest" ], [ "Warn only read-only", "warn_only_read_only" ] ], integration.compatibility_mode), class: "ui-control ui-text-body-sm" %>
             <%= hidden_field_tag "integration[verify_ssl]", "0" %>
-            <label class="flex items-center gap-2 text-sm text-slate-700">
+            <label class="flex items-center gap-2 ui-copy">
               <%= check_box_tag "integration[verify_ssl]", "1", integration.verify_ssl %>
               <span>Verify SSL</span>
             </label>
             <div>
-              <%= form.submit "Save", class: "rounded border border-slate-300 px-3 py-2 text-sm hover:bg-slate-100" %>
+              <%= form.submit "Save", class: "ui-button ui-button-secondary ui-motion" %>
             </div>
           <% end %>
           <div class="mt-2 flex gap-2">
-            <%= button_to "Check", check_integration_path(integration), method: :post, class: "rounded border border-slate-300 px-3 py-2 text-sm hover:bg-slate-100" %>
-            <%= button_to "Delete", integration_path(integration), method: :delete, class: "rounded border border-red-300 px-3 py-2 text-sm text-red-700 hover:bg-red-50" %>
+            <%= button_to "Check", check_integration_path(integration), method: :post, class: "ui-button ui-button-secondary ui-motion" %>
+            <%= button_to "Delete", integration_path(integration), method: :delete, class: "ui-button ui-button-danger ui-motion" %>
           </div>
 
-          <div class="mt-3 border-t border-slate-200 pt-3">
-            <h5 class="text-sm font-semibold text-slate-900">Path Mappings</h5>
+          <div class="mt-3 border-t ui-border pt-3">
+            <h5 class="ui-copy ui-text-primary font-semibold">Path Mappings</h5>
             <div class="mt-2 space-y-2">
               <% integration.path_mappings.each do |mapping| %>
-                <div class="flex items-center justify-between rounded border border-slate-200 px-3 py-2 text-sm text-slate-700">
+                <div class="flex items-center justify-between ui-surface-3 ui-border rounded-lg px-3 py-2 ui-copy">
                   <span><%= mapping.from_prefix %> → <%= mapping.to_prefix %></span>
-                  <%= button_to "Delete", integration_path_mapping_path(integration, mapping), method: :delete, class: "rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100" %>
+                  <%= button_to "Delete", integration_path_mapping_path(integration, mapping), method: :delete, class: "ui-button ui-button-secondary ui-button-compact ui-motion" %>
                 </div>
               <% end %>
             </div>
 
             <%= form_with url: integration_path_mappings_path(integration), method: :post, scope: :path_mapping, class: "mt-3 grid gap-2 md:grid-cols-3" do |form| %>
-              <%= form.text_field :from_prefix, placeholder: "/data/tv", autocomplete: "off", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
-              <%= form.text_field :to_prefix, placeholder: "/mnt/tv", autocomplete: "off", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
-              <%= form.submit "Add Mapping", class: "rounded border border-slate-300 px-3 py-2 text-sm hover:bg-slate-100" %>
+              <%= form.text_field :from_prefix, placeholder: "/data/tv", autocomplete: "off", class: "ui-control ui-text-body-sm" %>
+              <%= form.text_field :to_prefix, placeholder: "/mnt/tv", autocomplete: "off", class: "ui-control ui-text-body-sm" %>
+              <%= form.submit "Add Mapping", class: "ui-button ui-button-secondary ui-motion" %>
             <% end %>
           </div>
         </div>
@@ -233,21 +233,21 @@
     </div>
   </div>
 
-  <div class="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-    <h3 class="text-xl font-semibold text-slate-900">Path Exclusions</h3>
-    <p class="mt-2 text-sm text-slate-600">Excluded prefixes are blocked in candidate and deletion flows.</p>
+  <div class="ui-panel p-6">
+    <h3 class="ui-subheading">Path Exclusions</h3>
+    <p class="ui-copy mt-2">Excluded prefixes are blocked in candidate and deletion flows.</p>
 
     <%= form_with url: path_exclusions_path, method: :post, scope: :path_exclusion, class: "mt-4 grid gap-2 md:grid-cols-3" do |form| %>
-      <%= form.text_field :name, placeholder: "Kids media", required: true, autocomplete: "off", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
-      <%= form.text_field :path_prefix, placeholder: "/media/kids", required: true, autocomplete: "off", class: "rounded border border-slate-300 px-3 py-2 text-sm" %>
-      <%= form.submit "Add Exclusion", class: "rounded border border-slate-300 px-3 py-2 text-sm hover:bg-slate-100" %>
+      <%= form.text_field :name, placeholder: "Kids media", required: true, autocomplete: "off", class: "ui-control ui-text-body-sm" %>
+      <%= form.text_field :path_prefix, placeholder: "/media/kids", required: true, autocomplete: "off", class: "ui-control ui-text-body-sm" %>
+      <%= form.submit "Add Exclusion", class: "ui-button ui-button-secondary ui-motion" %>
     <% end %>
 
     <div class="mt-4 space-y-2">
       <% @path_exclusions.each do |exclusion| %>
-        <div class="flex items-center justify-between rounded border border-slate-200 px-3 py-2 text-sm text-slate-700">
+        <div class="flex items-center justify-between ui-surface-3 ui-border rounded-lg px-3 py-2 ui-copy">
           <span><%= exclusion.name %>: <%= exclusion.path_prefix %></span>
-          <%= button_to "Delete", path_exclusion_path(exclusion), method: :delete, class: "rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100" %>
+          <%= button_to "Delete", path_exclusion_path(exclusion), method: :delete, class: "ui-button ui-button-secondary ui-button-compact ui-motion" %>
         </div>
       <% end %>
     </div>

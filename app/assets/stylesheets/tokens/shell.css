@@ -1,0 +1,17 @@
+:root {
+  --h-topbar: 3.5rem;
+  --w-sidebar: 17rem;
+  --w-content-max: 90rem;
+}
+
+.ui-app {
+  background-color: hsl(var(--bg));
+  color: hsl(var(--text));
+  min-height: 100vh;
+}
+
+.ui-shell-container {
+  margin-inline: auto;
+  max-width: var(--w-content-max);
+  width: 100%;
+}
