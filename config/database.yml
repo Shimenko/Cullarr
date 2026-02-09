@@ -1,0 +1,54 @@
+default: &default
+  pool: <%= ENV.fetch("RAILS_MAX_THREADS") { 5 } %>
+  timeout: 5000
+
+development:
+  primary:
+    <<: *default
+    url: <%= ENV["DATABASE_URL"].presence || "sqlite3:storage/development.sqlite3" %>
+  cache:
+    <<: *default
+    url: <%= ENV["CACHE_DATABASE_URL"].presence || "sqlite3:storage/development_cache.sqlite3" %>
+    migrations_paths: db/cache_migrate
+  queue:
+    <<: *default
+    url: <%= ENV["QUEUE_DATABASE_URL"].presence || "sqlite3:storage/development_queue.sqlite3" %>
+    migrations_paths: db/queue_migrate
+  cable:
+    <<: *default
+    url: <%= ENV["CABLE_DATABASE_URL"].presence || "sqlite3:storage/development_cable.sqlite3" %>
+    migrations_paths: db/cable_migrate
+
+test:
+  primary:
+    <<: *default
+    url: <%= ENV["TEST_DATABASE_URL"].presence || "sqlite3:storage/test.sqlite3" %>
+  cache:
+    <<: *default
+    url: <%= ENV["TEST_CACHE_DATABASE_URL"].presence || "sqlite3:storage/test_cache.sqlite3" %>
+    migrations_paths: db/cache_migrate
+  queue:
+    <<: *default
+    url: <%= ENV["TEST_QUEUE_DATABASE_URL"].presence || "sqlite3:storage/test_queue.sqlite3" %>
+    migrations_paths: db/queue_migrate
+  cable:
+    <<: *default
+    url: <%= ENV["TEST_CABLE_DATABASE_URL"].presence || "sqlite3:storage/test_cable.sqlite3" %>
+    migrations_paths: db/cable_migrate
+
+production:
+  primary:
+    <<: *default
+    url: <%= ENV["PRODUCTION_DATABASE_URL"].presence || "sqlite3:storage/production.sqlite3" %>
+  cache:
+    <<: *default
+    url: <%= ENV["PRODUCTION_CACHE_DATABASE_URL"].presence || "sqlite3:storage/production_cache.sqlite3" %>
+    migrations_paths: db/cache_migrate
+  queue:
+    <<: *default
+    url: <%= ENV["PRODUCTION_QUEUE_DATABASE_URL"].presence || "sqlite3:storage/production_queue.sqlite3" %>
+    migrations_paths: db/queue_migrate
+  cable:
+    <<: *default
+    url: <%= ENV["PRODUCTION_CABLE_DATABASE_URL"].presence || "sqlite3:storage/production_cable.sqlite3" %>
+    migrations_paths: db/cable_migrate

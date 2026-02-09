@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint_and_security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: .ruby-version
+          bundler-cache: true
+
+      - name: Lint code for consistent style
+        run: bin/rubocop -f github
+
+      - name: Lint ERB templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t erb_files < <(find app/views app/components -type f -name '*.erb' 2>/dev/null | sort)
+          if [ "${#erb_files[@]}" -eq 0 ]; then
+            echo "No ERB templates found"
+            exit 0
+          fi
+
+          bundle exec erb_lint "${erb_files[@]}"
+
+      - name: Scan for common Rails security vulnerabilities using static analysis
+        run: bundle exec brakeman -q
+
+      - name: Scan for security vulnerabilities in Ruby dependencies
+        run: bundle exec bundle-audit check --update
+
+      - name: Scan for security vulnerabilities in JavaScript dependencies
+        run: bin/importmap audit
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RAILS_ENV: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: .ruby-version
+          bundler-cache: true
+
+      - name: Prepare test database
+        run: bin/rails db:prepare
+
+      - name: Run RSpec
+        run: bundle exec rspec

@@ -1,0 +1,9 @@
+{
+  "name": "controllers",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./*": "./*.js"
+  }
+}

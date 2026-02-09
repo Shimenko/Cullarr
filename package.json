@@ -1,0 +1,10 @@
+{
+  "name": "cullarr",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "controllers": "file:app/javascript/controllers",
+    "@hotwired/stimulus": "^3.2.2",
+    "@hotwired/turbo-rails": "^8.0.23"
+  }
+}

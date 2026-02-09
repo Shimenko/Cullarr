@@ -1,0 +1,27 @@
+inherit_gem:
+  rubocop-rails-omakase: rubocop.yml
+
+plugins:
+  - rubocop-rspec
+  - rubocop-performance
+
+AllCops:
+  NewCops: enable
+  TargetRubyVersion: 3.4
+  Exclude:
+    - db/schema.rb
+    - db/*_schema.rb
+    - bin/*
+
+Layout/LineLength:
+  Max: 100
+
+Metrics/BlockLength:
+  Exclude:
+    - spec/**/*
+
+RSpec/ExampleLength:
+  Max: 10
+
+RSpec/MultipleExpectations:
+  Max: 5

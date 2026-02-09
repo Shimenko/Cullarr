@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "controllers": [
+        "app/javascript/controllers/index.js"
+      ],
+      "controllers/*": [
+        "app/javascript/controllers/*"
+      ]
+    }
+  },
+  "include": [
+    "app/javascript/**/*.js"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}

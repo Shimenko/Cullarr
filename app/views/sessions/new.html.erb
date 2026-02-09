@@ -1,0 +1,41 @@
+<div class="mx-auto max-w-md rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+  <% if @bootstrap_mode %>
+    <h2 class="text-xl font-semibold text-slate-900">Create Operator Account</h2>
+    <p class="mt-2 text-sm text-slate-600">
+      Cullarr allows a single operator account. This setup screen is available only once.
+    </p>
+
+    <%= form_with model: @operator, url: session_path, class: "mt-6 space-y-4" do |form| %>
+      <div>
+        <%= form.label :email, class: "mb-1 block text-sm font-medium text-slate-700" %>
+        <%= form.email_field :email, required: true, class: "w-full rounded-md border border-slate-300 px-3 py-2 text-sm" %>
+      </div>
+      <div>
+        <%= form.label :password, class: "mb-1 block text-sm font-medium text-slate-700" %>
+        <%= form.password_field :password, required: true, class: "w-full rounded-md border border-slate-300 px-3 py-2 text-sm" %>
+      </div>
+      <div>
+        <%= form.label :password_confirmation, class: "mb-1 block text-sm font-medium text-slate-700" %>
+        <%= form.password_field :password_confirmation, required: true, class: "w-full rounded-md border border-slate-300 px-3 py-2 text-sm" %>
+      </div>
+      <%= form.submit "Create Operator", class: "w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800" %>
+    <% end %>
+  <% else %>
+    <h2 class="text-xl font-semibold text-slate-900">Sign In</h2>
+    <p class="mt-2 text-sm text-slate-600">
+      Authentication is required for all Cullarr operations.
+    </p>
+
+    <%= form_with scope: :session, url: session_path, class: "mt-6 space-y-4" do |form| %>
+      <div>
+        <%= form.label :email, class: "mb-1 block text-sm font-medium text-slate-700" %>
+        <%= form.email_field :email, required: true, value: @operator&.email, class: "w-full rounded-md border border-slate-300 px-3 py-2 text-sm" %>
+      </div>
+      <div>
+        <%= form.label :password, class: "mb-1 block text-sm font-medium text-slate-700" %>
+        <%= form.password_field :password, required: true, class: "w-full rounded-md border border-slate-300 px-3 py-2 text-sm" %>
+      </div>
+      <%= form.submit "Sign In", class: "w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800" %>
+    <% end %>
+  <% end %>
+</div>
