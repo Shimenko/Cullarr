@@ -1,0 +1,17 @@
+{
+  "response": {
+    "result": "success",
+    "data": [
+      {
+        "user_id": 10,
+        "friendly_name": "Alice",
+        "is_active": 1
+      },
+      {
+        "user_id": 11,
+        "friendly_name": "Bob",
+        "is_active": 0
+      }
+    ]
+  }
+}

@@ -15,6 +15,7 @@ Rails.application.routes.draw do
       }
   resource :settings, only: %i[show update], controller: :settings
   get "runs", to: "runs#index"
+  post "runs/sync-now", to: "runs#sync_now", as: :runs_sync_now
 
   resources :integrations, only: %i[create update destroy] do
     post :check, on: :member
@@ -39,6 +40,7 @@ Rails.application.routes.draw do
         end
         resources :path_exclusions, only: %i[index create update destroy]
         resources :keep_markers, only: %i[index create destroy]
+        resources :sync_runs, path: "sync-runs", only: %i[index show create]
         resource :operator_password, only: %i[update]
         post "security/re-auth", to: "security/re_auth#create"
       end

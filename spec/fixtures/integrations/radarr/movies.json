@@ -1,0 +1,18 @@
+[
+  {
+    "id": 701,
+    "title": "Example Movie",
+    "year": 2021,
+    "tmdbId": 555001,
+    "imdbId": "tt555001",
+    "runtime": 121,
+    "path": "/data/movies/Example Movie (2021)",
+    "monitored": true,
+    "ratings": {
+      "plex": {
+        "ratingKey": "plex-movie-701",
+        "guid": "plex://movie/701"
+      }
+    }
+  }
+]

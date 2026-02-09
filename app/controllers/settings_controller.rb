@@ -3,6 +3,7 @@ class SettingsController < ApplicationController
     @effective_settings = AppSetting.effective_settings
     @integrations = Integration.includes(:path_mappings).order(:name)
     @path_exclusions = PathExclusion.order(:path_prefix)
+    @mapping_health_metrics = Sync::MappingHealthMetrics.new.call
   end
 
   def update

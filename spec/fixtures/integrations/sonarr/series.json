@@ -1,0 +1,18 @@
+[
+  {
+    "id": 101,
+    "title": "Example Show",
+    "year": 2020,
+    "tvdbId": 12345,
+    "imdbId": "tt000001",
+    "tmdbId": 67890,
+    "path": "/data/tv/Example Show",
+    "monitored": true,
+    "ratings": {
+      "plex": {
+        "ratingKey": "plex-show-101",
+        "guid": "plex://show/101"
+      }
+    }
+  }
+]

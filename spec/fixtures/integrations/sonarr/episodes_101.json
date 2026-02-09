@@ -1,0 +1,19 @@
+[
+  {
+    "id": 5001,
+    "seasonNumber": 1,
+    "episodeNumber": 1,
+    "title": "Pilot",
+    "airDate": "2020-01-01",
+    "runtime": 50,
+    "tvdbId": 90001,
+    "imdbId": "tt100001",
+    "tmdbId": 200001,
+    "ratings": {
+      "plex": {
+        "ratingKey": "plex-ep-5001",
+        "guid": "plex://episode/5001"
+      }
+    }
+  }
+]

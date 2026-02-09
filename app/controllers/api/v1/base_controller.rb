@@ -2,6 +2,7 @@ module Api
   module V1
     class BaseController < ApplicationController
       prepend_before_action :set_api_version_header
+      rescue_from StandardError, with: :handle_internal_error
       rescue_from ActionController::ParameterMissing, with: :handle_parameter_missing
 
       private
@@ -38,6 +39,19 @@ module Api
         missing_key = "base" if missing_key.blank?
 
         render_validation_error(fields: { missing_key => [ "is required" ] })
+      end
+
+      def handle_internal_error(error)
+        Rails.logger.error(
+          "api_internal_error correlation_id=#{@correlation_id} class=#{error.class} message=#{error.message}"
+        )
+        Rails.logger.error(error.backtrace.first(10).join("\n")) if error.backtrace.present?
+
+        render_api_error(
+          code: "internal_error",
+          message: "An unexpected error occurred while processing this request.",
+          status: :internal_server_error
+        )
       end
     end
   end

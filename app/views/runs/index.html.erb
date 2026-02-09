@@ -1,5 +1,5 @@
-<%= render Ui::PanelComponent.new(title: "Runs") do %>
-  <p class="ui-copy">
-    Sync and deletion run history UI will land in later slices. Worker infrastructure is active in this baseline.
-  </p>
-<% end %>
+<%= turbo_stream_from "sync_runs" %>
+
+<div id="sync-runs-snapshot">
+  <%= render "sync_runs_snapshot", running_sync_run: @running_sync_run, recent_sync_runs: @recent_sync_runs %>
+</div>

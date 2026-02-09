@@ -1,0 +1,13 @@
+[
+  {
+    "id": 9001,
+    "episodeId": 5001,
+    "path": "/data/tv/Example Show/Season 01/Example Show - S01E01.mkv",
+    "size": 734003200,
+    "quality": {
+      "quality": {
+        "name": "HDTV-1080p"
+      }
+    }
+  }
+]

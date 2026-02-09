@@ -1,0 +1,45 @@
+<%= render Ui::PanelComponent.new(title: "Sync Runs", subtitle: "Current and recent synchronization activity") do %>
+  <div class="ui-stack-sm">
+    <%= button_to "Sync now", runs_sync_now_path, method: :post, class: "ui-button ui-button-primary" %>
+  </div>
+
+  <% if running_sync_run.present? %>
+    <p class="ui-copy">
+      Active run <code>#<%= running_sync_run.id %></code>:
+      <strong><%= running_sync_run.phase.presence || "starting" %></strong>
+      (<%= running_sync_run.trigger %>)
+    </p>
+  <% else %>
+    <p class="ui-copy">No sync run is currently active.</p>
+  <% end %>
+
+  <table class="ui-table" aria-label="Recent sync runs">
+    <thead>
+      <tr>
+        <th scope="col">Run</th>
+        <th scope="col">Status</th>
+        <th scope="col">Trigger</th>
+        <th scope="col">Phase</th>
+        <th scope="col">Started</th>
+        <th scope="col">Finished</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% recent_sync_runs.each do |sync_run| %>
+        <tr id="sync-run-<%= sync_run.id %>">
+          <td><code>#<%= sync_run.id %></code></td>
+          <td><%= sync_run.status %></td>
+          <td><%= sync_run.trigger %></td>
+          <td><%= sync_run.phase.presence || "-" %></td>
+          <td><%= sync_run.started_at&.strftime("%Y-%m-%d %H:%M:%S") || "-" %></td>
+          <td><%= sync_run.finished_at&.strftime("%Y-%m-%d %H:%M:%S") || "-" %></td>
+        </tr>
+      <% end %>
+      <% if recent_sync_runs.empty? %>
+        <tr>
+          <td colspan="6">No sync runs have executed yet.</td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+<% end %>

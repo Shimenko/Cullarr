@@ -1,36 +1,25 @@
 module Integrations
   class HealthCheck
-    def initialize(integration)
+    def initialize(integration, raise_on_unsupported: false)
       @integration = integration
+      @raise_on_unsupported = raise_on_unsupported
     end
 
     def call
-      reported_version = fetch_reported_version
-      supported = CompatibilityPolicy.supports?(kind: integration.kind, version: reported_version)
-      compatibility_mode = integration.compatibility_mode
-
-      status = if supported
-        "healthy"
-      elsif compatibility_mode == "warn_only_read_only"
-        "warning"
-      else
-        "unsupported"
-      end
-
-      integration.update!(
-        status: status,
-        reported_version: reported_version,
-        last_checked_at: Time.current,
-        last_error: nil,
-        settings_json: integration.settings_json.merge("supported_for_delete" => (supported && status == "healthy"))
-      )
-
-      {
-        status: status,
-        reported_version: reported_version,
-        supported_for_delete: supported && status == "healthy",
-        compatibility_mode: compatibility_mode
+      result = adapter.check_health!
+      persist_result!(result)
+      result.merge(compatibility_mode: integration.compatibility_mode)
+    rescue UnsupportedVersionError => error
+      result = {
+        status: "unsupported",
+        reported_version: error.details[:reported_version] || integration.reported_version,
+        supported_for_delete: false,
+        compatibility_mode: integration.compatibility_mode
       }
+      persist_result!(result, last_error: error.message)
+      raise if raise_on_unsupported
+
+      result
     rescue Faraday::ConnectionFailed, Faraday::TimeoutError
       integration.update!(
         status: "error",
@@ -51,56 +40,20 @@ module Integrations
 
     attr_reader :integration
 
-    def fetch_reported_version
-      case integration.kind
-      when "sonarr", "radarr"
-        fetch_arr_version
-      when "tautulli"
-        fetch_tautulli_version
-      else
-        raise ContractMismatchError.new("unsupported integration kind", details: { kind: integration.kind })
-      end
+    attr_reader :raise_on_unsupported
+
+    def adapter
+      @adapter ||= AdapterFactory.for(integration:)
     end
 
-    def fetch_arr_version
-      response = connection.get("api/v3/system/status") do |request|
-        request.headers["X-Api-Key"] = integration.api_key
-      end
-      parsed = parse_json_response(response)
-      parsed.fetch("version")
-    end
-
-    def fetch_tautulli_version
-      response = connection.get("api/v2") do |request|
-        request.params["apikey"] = integration.api_key
-        request.params["cmd"] = "get_tautulli_info"
-      end
-      parsed = parse_json_response(response)
-      parsed.fetch("response").fetch("data").fetch("tautulli_version")
-    end
-
-    def parse_json_response(response)
-      case response.status
-      when 200
-        JSON.parse(response.body)
-      when 401, 403
-        raise AuthError.new("integration authentication failed")
-      when 429
-        raise RateLimitedError.new("integration is rate-limited")
-      else
-        raise ConnectivityError.new("integration returned unexpected status #{response.status}")
-      end
-    rescue JSON::ParserError
-      raise ContractMismatchError.new("integration returned malformed JSON")
-    rescue KeyError
-      raise ContractMismatchError.new("integration response did not include required fields")
-    end
-
-    def connection
-      @connection ||= Faraday.new(url: integration.base_url, ssl: { verify: integration.verify_ssl }) do |builder|
-        builder.options.timeout = integration.request_timeout_seconds
-        builder.options.open_timeout = integration.request_timeout_seconds
-      end
+    def persist_result!(result, last_error: nil)
+      integration.update!(
+        status: result.fetch(:status),
+        reported_version: result[:reported_version],
+        last_checked_at: Time.current,
+        last_error: last_error,
+        settings_json: integration.settings_json.merge("supported_for_delete" => result.fetch(:supported_for_delete))
+      )
     end
   end
 end

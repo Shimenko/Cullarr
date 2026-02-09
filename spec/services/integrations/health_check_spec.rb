@@ -1,5 +1,6 @@
 require "rails_helper"
 
+# rubocop:disable RSpec/ExampleLength
 RSpec.describe Integrations::HealthCheck, type: :service do
   let(:integration) do
     Integration.create!(
@@ -15,10 +16,14 @@ RSpec.describe Integrations::HealthCheck, type: :service do
   let(:compatibility_mode) { "strict_latest" }
 
   it "marks unsupported version in strict mode" do
-    connection = instance_double(Faraday::Connection)
-    response = instance_double(Faraday::Response, status: 200, body: { version: "3.0.0" }.to_json)
-    allow(Faraday).to receive(:new).and_return(connection)
-    allow(connection).to receive(:get).and_return(response)
+    adapter = instance_double(Integrations::SonarrAdapter)
+    allow(Integrations::AdapterFactory).to receive(:for).with(integration:).and_return(adapter)
+    allow(adapter).to receive(:check_health!).and_raise(
+      Integrations::UnsupportedVersionError.new(
+        "integration version is unsupported",
+        details: { reported_version: "3.0.0" }
+      )
+    )
 
     result = described_class.new(integration).call
 
@@ -27,26 +32,53 @@ RSpec.describe Integrations::HealthCheck, type: :service do
     expect(integration.supported_for_delete?).to be(false)
   end
 
+  it "raises unsupported errors when requested by caller" do
+    adapter = instance_double(Integrations::SonarrAdapter)
+    allow(Integrations::AdapterFactory).to receive(:for).with(integration:).and_return(adapter)
+    allow(adapter).to receive(:check_health!).and_raise(
+      Integrations::UnsupportedVersionError.new(
+        "integration version is unsupported",
+        details: { reported_version: "3.0.0" }
+      )
+    )
+
+    expect do
+      described_class.new(integration, raise_on_unsupported: true).call
+    end.to raise_error(Integrations::UnsupportedVersionError)
+  end
+
   it "requests ARR health endpoint relative to base_url path prefix" do
-    integration.update!(base_url: "https://sonarr.local/proxy")
-    connection = instance_double(Faraday::Connection)
-    response = instance_double(Faraday::Response, status: 200, body: { version: "4.0.1" }.to_json)
-    allow(Faraday).to receive(:new).and_return(connection)
-    allow(connection).to receive(:get).with("api/v3/system/status").and_return(response)
+    adapter = instance_double(Integrations::SonarrAdapter)
+    allow(Integrations::AdapterFactory).to receive(:for).with(integration:).and_return(adapter)
+    allow(adapter).to receive(:check_health!).and_return(
+      {
+        status: "healthy",
+        reported_version: "4.0.1",
+        supported_for_delete: true,
+        warnings: []
+      }
+    )
 
-    described_class.new(integration).call
+    result = described_class.new(integration).call
 
-    expect(connection).to have_received(:get).with("api/v3/system/status")
+    expect(result[:status]).to eq("healthy")
+    expect(integration.reload.reported_version).to eq("4.0.1")
   end
 
   context "when warn_only_read_only mode is enabled" do
     let(:compatibility_mode) { "warn_only_read_only" }
 
     it "marks unsupported version as warning" do
-      connection = instance_double(Faraday::Connection)
-      response = instance_double(Faraday::Response, status: 200, body: { version: "3.0.0" }.to_json)
-      allow(Faraday).to receive(:new).and_return(connection)
-      allow(connection).to receive(:get).and_return(response)
+      adapter = instance_double(Integrations::SonarrAdapter)
+      allow(Integrations::AdapterFactory).to receive(:for).with(integration:).and_return(adapter)
+      allow(adapter).to receive(:check_health!).and_return(
+        {
+          status: "warning",
+          reported_version: "3.0.0",
+          supported_for_delete: false,
+          warnings: [ "unsupported version running in warn-only read mode" ]
+        }
+      )
 
       result = described_class.new(integration).call
 
@@ -55,3 +87,4 @@ RSpec.describe Integrations::HealthCheck, type: :service do
     end
   end
 end
+# rubocop:enable RSpec/ExampleLength

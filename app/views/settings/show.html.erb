@@ -163,6 +163,39 @@
   <% end %>
 
   <%= render Ui::PanelComponent.new(
+    title: "Mapping Health",
+    subtitle: "Canonical path mapping quality and overlap risk indicators from the latest local index state.",
+    padding: :lg
+  ) do %>
+    <dl class="grid gap-3 md:grid-cols-3">
+      <div class="rounded-lg border ui-border p-3 ui-copy">
+        <dt class="ui-help">Enabled Path Mappings</dt>
+        <dd class="ui-text-primary font-semibold"><%= @mapping_health_metrics.fetch(:enabled_path_mappings) %></dd>
+      </div>
+      <div class="rounded-lg border ui-border p-3 ui-copy">
+        <dt class="ui-help">Media Files Indexed</dt>
+        <dd class="ui-text-primary font-semibold"><%= @mapping_health_metrics.fetch(:media_files_total) %></dd>
+      </div>
+      <div class="rounded-lg border ui-border p-3 ui-copy">
+        <dt class="ui-help">Canonicalized File Paths</dt>
+        <dd class="ui-text-primary font-semibold"><%= @mapping_health_metrics.fetch(:media_files_with_canonical_path) %></dd>
+      </div>
+      <div class="rounded-lg border ui-border p-3 ui-copy">
+        <dt class="ui-help">Ambiguous Canonical Paths</dt>
+        <dd class="ui-text-primary font-semibold"><%= @mapping_health_metrics.fetch(:ambiguous_path_count) %></dd>
+      </div>
+      <div class="rounded-lg border ui-border p-3 ui-copy">
+        <dt class="ui-help">Ambiguous Media Files</dt>
+        <dd class="ui-text-primary font-semibold"><%= @mapping_health_metrics.fetch(:ambiguous_media_file_count) %></dd>
+      </div>
+      <div class="rounded-lg border ui-border p-3 ui-copy">
+        <dt class="ui-help">Integrations Without Path Mappings</dt>
+        <dd class="ui-text-primary font-semibold"><%= @mapping_health_metrics.fetch(:integrations_without_path_mappings) %></dd>
+      </div>
+    </dl>
+  <% end %>
+
+  <%= render Ui::PanelComponent.new(
     title: "Security",
     subtitle: "Re-authenticate before sensitive actions and rotate password here. Current unlock window: #{setting_value.call("sensitive_action_reauthentication_window_minutes")} minutes.",
     padding: :lg
@@ -332,6 +365,12 @@
 
           <div class="mt-3 border-t ui-border pt-3">
             <h5 class="ui-copy ui-text-primary font-semibold">Path Mappings</h5>
+            <p class="mt-1 ui-help">
+              Use mappings when integration mount prefixes differ from local canonical prefixes.
+            </p>
+            <p class="mt-1 ui-help">
+              Root mapping (<code>/</code>) is supported and applies to all absolute paths; prefer explicit prefixes first when possible.
+            </p>
             <div class="mt-2 space-y-2">
               <% integration.path_mappings.each do |mapping| %>
                 <div class="flex items-center justify-between gap-2 rounded-lg border ui-border px-3 py-2 ui-copy ui-hover-row">

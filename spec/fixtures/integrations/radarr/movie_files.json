@@ -1,0 +1,13 @@
+[
+  {
+    "id": 8001,
+    "movieId": 701,
+    "path": "/data/movies/Example Movie (2021)/Example Movie (2021).mkv",
+    "size": 3221225472,
+    "quality": {
+      "quality": {
+        "name": "Bluray-1080p"
+      }
+    }
+  }
+]
