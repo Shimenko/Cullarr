@@ -2,7 +2,7 @@ class ApplicationController < ActionController::Base
   before_action :set_correlation_id
   before_action :require_login
 
-  helper_method :current_operator, :operator_signed_in?
+  helper_method :current_operator, :operator_signed_in?, :reauthenticated_recently?
 
   private
 
@@ -30,6 +30,21 @@ class ApplicationController < ActionController::Base
     response.set_header("X-Correlation-Id", @correlation_id)
   end
 
+  def mark_recent_reauthentication!
+    session[:reauthenticated_at] = Time.current.to_i
+  end
+
+  def clear_reauthentication!
+    session.delete(:reauthenticated_at)
+  end
+
+  def reauthenticated_recently?
+    timestamp = session[:reauthenticated_at]
+    return false if timestamp.blank?
+
+    Time.at(timestamp) >= reauthentication_window.ago
+  end
+
   def error_envelope(code:, message:, details: {})
     {
       error: {
@@ -39,5 +54,13 @@ class ApplicationController < ActionController::Base
         details:
       }
     }
+  end
+
+  def reauthentication_window
+    minutes = AppSetting.db_value_for("sensitive_action_reauthentication_window_minutes").to_i
+    minutes = 15 if minutes <= 0
+    minutes.minutes
+  rescue ActiveRecord::ActiveRecordError, KeyError
+    15.minutes
   end
 end

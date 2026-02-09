@@ -15,6 +15,7 @@ class SessionsController < ApplicationController
   end
 
   def destroy
+    clear_reauthentication!
     reset_session
     redirect_to new_session_path, notice: "Signed out."
   end
@@ -54,6 +55,7 @@ class SessionsController < ApplicationController
   end
 
   def sign_in(operator)
+    clear_reauthentication!
     reset_session
     session[:operator_id] = operator.id
     operator.update!(last_login_at: Time.current)

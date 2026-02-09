@@ -153,6 +153,53 @@ bundle exec bundle-audit check --update
 bundle exec rspec
 ```
 
+## Integration URL allow policy (optional)
+
+- By default, integration URL validation is permissive.
+- To restrict integration targets, set one or both env vars:
+  - `CULLARR_ALLOWED_INTEGRATION_HOSTS` (comma-separated host patterns with wildcard support)
+  - `CULLARR_ALLOWED_INTEGRATION_NETWORK_RANGES` (comma-separated CIDR ranges)
+
+Examples:
+
+```bash
+export CULLARR_ALLOWED_INTEGRATION_HOSTS=sonarr.local,radarr.local,tautulli.local
+export CULLARR_ALLOWED_INTEGRATION_NETWORK_RANGES=192.168.1.0/24,10.0.0.0/24
+```
+
+When either list is configured, integration hosts must match the configured policy.
+
+Wildcard examples:
+
+```bash
+export CULLARR_ALLOWED_INTEGRATION_HOSTS=*.local,sonarr-*,*
+```
+
+## Active Record Encryption keys
+
+- Integration API keys are encrypted at rest via Active Record Encryption.
+- Configure these env vars (required in production):
+  - `ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEYS` (comma-separated key ring, oldest first, active key last)
+  - `ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY`
+  - `ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT`
+- Generate values with:
+
+```bash
+bin/rails db:encryption:init
+```
+
+Key rotation workflow:
+
+1. Append a new primary key to `ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEYS` (keep old keys).
+2. Deploy/restart with the updated key ring.
+3. Re-encrypt stored integration API keys with the active key:
+
+```bash
+bin/rails cullarr:encryption:rotate_integration_api_keys
+```
+
+4. After verification, remove retired keys from the front of the key ring in a later deploy.
+
 ## API baseline
 
 JSON operation endpoints are versioned under `/api/v1/*`.
