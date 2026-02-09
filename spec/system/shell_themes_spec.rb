@@ -46,4 +46,18 @@ RSpec.describe "ShellThemes", type: :system do
     expect(page).to have_content("Invalid email or password.")
     expect(page).to have_css("div.ui-inline-alert.ui-inline-alert-danger", text: "Invalid email or password.")
   end
+
+  it "keeps dashboard, settings, and runs pages navigable after primitive migration" do
+    create_operator!
+    sign_in!
+
+    click_link "Settings"
+    expect(page).to have_css("section.ui-panel", text: "Settings")
+
+    click_link "Runs"
+    expect(page).to have_css("section.ui-panel", text: "Runs")
+
+    click_link "Dashboard"
+    expect(page).to have_css("section.ui-panel", text: "Dashboard")
+  end
 end

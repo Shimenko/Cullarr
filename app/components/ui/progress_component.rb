@@ -30,12 +30,15 @@ class Ui::ProgressComponent < Ui::BaseComponent
   attr_reader :value, :max, :label, :caption, :animated, :variant
 
   def wrapper_attributes
-    html_attributes(default_classes: [ "ui-progress" ])
+    html_attributes(
+      default_classes: [ "ui-progress" ],
+      data: { progress_state: progress_state }
+    )
   end
 
   def fill_attributes
     classes = %W[ui-progress-fill ui-progress-fill-#{variant}]
-    classes << "ui-progress-scan" if animated
+    classes << "ui-progress-scan" if animated && running?
 
     {
       class: classes.join(" "),
@@ -45,6 +48,14 @@ class Ui::ProgressComponent < Ui::BaseComponent
 
   def percent
     ((value / max) * 100).clamp(0, 100).round(2)
+  end
+
+  def running?
+    percent < 100
+  end
+
+  def progress_state
+    running? ? "running" : "complete"
   end
 
   def normalize_number(name:, value:)

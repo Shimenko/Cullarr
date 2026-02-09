@@ -44,8 +44,9 @@
           <% end %>
         </div>
         <% if operator_signed_in? %>
-          <%= button_to "Sign out", session_path, method: :delete,
-                        class: "ui-button ui-button-secondary ui-motion ui-motion-lift" %>
+          <%= form_with url: session_path, method: :delete do %>
+            <%= render Ui::ButtonComponent.new(label: "Sign out", variant: :secondary, type: :submit) %>
+          <% end %>
         <% end %>
       </div>
     </header>

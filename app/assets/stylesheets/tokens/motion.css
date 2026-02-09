@@ -50,4 +50,8 @@
   .ui-motion-lift:hover {
     transform: none;
   }
+
+  .ui-hover-row:hover {
+    transform: none;
+  }
 }

@@ -23,6 +23,7 @@
         <%= render Ui::ButtonComponent.new(label: "Default", size: :md) %>
         <%= render Ui::ButtonComponent.new(label: "Large", size: :lg, icon: "loader", icon_position: :trailing) %>
         <%= render Ui::ButtonComponent.new(label: "Disabled", disabled: true, variant: :secondary) %>
+        <%= render Ui::ButtonComponent.new(label: "Loading", disabled: true, variant: :secondary, icon: "loader") %>
         <%= render Ui::ButtonComponent.new(label: "Settings Link", href: settings_path, variant: :secondary) %>
       </div>
 
@@ -89,7 +90,7 @@
       <%= render Ui::SelectComponent.new(
         name: "settings[watch_mode]",
         label: "Watch Mode",
-        options: [[ "Play count", "play_count" ], %w[Percent percent]],
+        options: [ [ "Play count", "play_count" ], %w[Percent percent] ],
         selected: "play_count",
         help_text: "Percent mode requires duration and offset metadata"
       ) %>
@@ -114,6 +115,76 @@
       <%= render Ui::ProgressComponent.new(value: 22, max: 100, label: "Sync Run", animated: true) %>
       <%= render Ui::ProgressComponent.new(value: 4, max: 12, label: "Deletion Actions", caption: "4 / 12 confirmed", variant: :warning) %>
       <%= render Ui::ProgressComponent.new(value: 12, max: 12, label: "Cleanup", caption: "Complete", variant: :success) %>
+    </div>
+  <% end %>
+
+  <%= render Ui::PanelComponent.new(title: "Interaction Controllers", subtitle: "Hold-to-confirm, copy feedback, and row expansion behavior") do %>
+    <div class="grid gap-4 md:grid-cols-3">
+      <section>
+        <p class="ui-copy mb-2">Hold to confirm</p>
+        <button
+          type="button"
+          class="ui-button ui-button-danger ui-hold-confirm"
+          data-controller="hold-to-confirm"
+          data-hold-to-confirm-duration-value="320"
+          data-hold-to-confirm-confirmed-text-value="Confirmed"
+          data-action="pointerdown->hold-to-confirm#start pointerup->hold-to-confirm#cancel pointerleave->hold-to-confirm#cancel pointercancel->hold-to-confirm#cancel mousedown->hold-to-confirm#start mouseup->hold-to-confirm#cancel mouseleave->hold-to-confirm#cancel touchstart->hold-to-confirm#start touchend->hold-to-confirm#cancel keydown->hold-to-confirm#start keyup->hold-to-confirm#cancel blur->hold-to-confirm#cancel"
+          data-testid="hold-to-confirm-demo"
+          aria-label="Hold to confirm delete preview"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="0">
+          <span class="ui-hold-confirm-progress" data-hold-to-confirm-target="progress"></span>
+          <span class="ui-button-label" data-hold-to-confirm-target="label">Hold to confirm</span>
+        </button>
+      </section>
+
+      <section data-controller="copy-to-clipboard" data-copy-to-clipboard-reset-delay-value="1000">
+        <p class="ui-copy mb-2">Copy to clipboard</p>
+        <div class="space-y-2">
+          <input
+            type="text"
+            class="ui-control ui-text-body-sm"
+            data-copy-to-clipboard-target="source"
+            value="/media/movies/example.movie.mkv"
+            readonly="readonly"
+            autocomplete="off">
+          <%= render Ui::ButtonComponent.new(
+            label: "Copy path",
+            variant: :secondary,
+            type: :button,
+            data: { action: "copy-to-clipboard#copy", testid: "copy-to-clipboard-demo" }
+          ) %>
+          <p class="ui-copy-feedback" data-copy-to-clipboard-target="feedback">
+            Press copy to get immediate status feedback.
+          </p>
+        </div>
+      </section>
+
+      <section
+        class="rounded-lg border ui-border p-3 ui-hover-row"
+        data-controller="row-expand"
+        data-row-expand-expanded-value="false"
+        data-testid="row-expand-demo">
+        <p class="ui-copy mb-2">Row expansion</p>
+        <button
+          type="button"
+          class="ui-button ui-button-secondary"
+          data-row-expand-target="toggle"
+          data-action="click->row-expand#toggle keydown->row-expand#toggle"
+          data-testid="row-expand-toggle"
+          aria-controls="row-expand-content-demo"
+          aria-expanded="false">
+          Toggle details
+        </button>
+        <div
+          id="row-expand-content-demo"
+          class="ui-row-expand-content"
+          data-row-expand-target="content"
+          hidden="hidden">
+          Expanded row details remain server-truthful; Stimulus only controls the disclosure state.
+        </div>
+      </section>
     </div>
   <% end %>
 

@@ -3,14 +3,24 @@
 require "rails_helper"
 
 RSpec.describe Ui::ProgressComponent, type: :component do
-  it "renders progress metadata and animated fill" do
+  it "renders running progress metadata and animated fill scan" do
     fragment = render_inline(
       described_class.new(value: 45, max: 120, label: "Sync", caption: "45 / 120", animated: true)
     )
 
     expect(fragment.css("span.ui-progress-label", text: "Sync").size).to eq(1)
+    expect(fragment.css("div.ui-progress[data-progress-state='running']").size).to eq(1)
     expect(fragment.css("span.ui-progress-fill.ui-progress-scan").size).to eq(1)
     expect(fragment.css("span.ui-progress-caption", text: "45 / 120").size).to eq(1)
+  end
+
+  it "stops scan animation when progress is complete" do
+    fragment = render_inline(
+      described_class.new(value: 120, max: 120, label: "Sync", animated: true)
+    )
+
+    expect(fragment.css("div.ui-progress[data-progress-state='complete']").size).to eq(1)
+    expect(fragment.css("span.ui-progress-fill.ui-progress-scan").size).to eq(0)
   end
 
   it "rejects non-positive max" do

@@ -25,8 +25,20 @@ RSpec.describe "UiStyleguides", type: :system do
 
     expect(page).to have_content("UI Primitive Styleguide")
     expect(page).to have_css("button.ui-button.ui-button-primary", text: "Primary")
+    expect(page).to have_css("button.ui-button.ui-button-secondary[disabled]", text: "Loading")
     expect(page).to have_css("span.ui-chip.ui-chip-blocker", text: "In progress")
     expect(page).to have_css("div.ui-inline-alert.ui-inline-alert-danger", text: "Delete blocked")
-    expect(page).to have_css("div.ui-progress")
+  end
+
+  it "includes interaction controller demos" do
+    sign_in_operator!
+
+    visit "/ui"
+
+    expect(page).to have_css("button[data-controller='hold-to-confirm']")
+    expect(page).to have_css("section[data-controller='copy-to-clipboard']")
+    expect(page).to have_css("section[data-controller='row-expand']")
+    expect(page).to have_css("[data-testid='row-expand-demo'].ui-hover-row")
+    expect(page).to have_css("div.ui-progress[data-progress-state='complete']")
   end
 end
