@@ -37,13 +37,13 @@ RSpec.describe "ShellThemes", type: :system do
     click_button "Sign out"
 
     expect(page).to have_content("Signed out.")
-    expect(page).to have_css("p.ui-flash.ui-flash-notice", text: "Signed out.")
+    expect(page).to have_css("div.ui-inline-alert.ui-inline-alert-success", text: "Signed out.")
 
     fill_in "Email", with: "owner@example.com"
     fill_in "Password", with: "wrong-password"
     click_button "Sign In"
 
     expect(page).to have_content("Invalid email or password.")
-    expect(page).to have_css("p.ui-flash.ui-flash-alert", text: "Invalid email or password.")
+    expect(page).to have_css("div.ui-inline-alert.ui-inline-alert-danger", text: "Invalid email or password.")
   end
 end

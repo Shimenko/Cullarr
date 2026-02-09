@@ -1,0 +1,13 @@
+<%= tag.section(**panel_attributes) do %>
+  <% if show_header? %>
+    <header class="ui-panel-header">
+      <% if title.present? %>
+        <h3 class="ui-subheading"><%= title %></h3>
+      <% end %>
+      <% if subtitle.present? %>
+        <p class="ui-copy"><%= subtitle %></p>
+      <% end %>
+    </header>
+  <% end %>
+  <div class="ui-panel-body"><%= content %></div>
+<% end %>

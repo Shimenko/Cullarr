@@ -1,0 +1,18 @@
+<%= tag.div(**wrapper_attributes) do %>
+  <% if label.present? || caption.present? %>
+    <div class="ui-progress-meta">
+      <% if label.present? %>
+        <span class="ui-progress-label"><%= label %></span>
+      <% end %>
+      <% if caption.present? %>
+        <span class="ui-progress-caption ui-tabular"><%= caption %></span>
+      <% else %>
+        <span class="ui-progress-caption ui-tabular"><%= percent %>%</span>
+      <% end %>
+    </div>
+  <% end %>
+
+  <div class="ui-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="<%= max %>" aria-valuenow="<%= value %>">
+    <%= tag.span(**fill_attributes) %>
+  </div>
+<% end %>

@@ -1,0 +1,6 @@
+<%= tag.span(**chip_attributes) do %>
+  <% if show_icon? %>
+    <%= render Ui::IconComponent.new(name: icon, size: :sm, class_name: "ui-chip-icon") %>
+  <% end %>
+  <span><%= content_text %></span>
+<% end %>

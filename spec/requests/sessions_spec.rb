@@ -23,7 +23,7 @@ RSpec.describe "Sessions", type: :request do
 
     expect(response).to have_http_status(:ok)
     expect(response.body).to include("Signed in.")
-    expect(response.body).to include("ui-flash ui-flash-notice")
+    expect(response.body).to include("ui-inline-alert ui-inline-alert-success")
   end
 
   it "rejects invalid credentials" do
@@ -33,6 +33,6 @@ RSpec.describe "Sessions", type: :request do
 
     expect(response).to have_http_status(:unprocessable_content)
     expect(response.body).to include("Invalid email or password")
-    expect(response.body).to include("ui-flash ui-flash-alert")
+    expect(response.body).to include("ui-inline-alert ui-inline-alert-danger")
   end
 end

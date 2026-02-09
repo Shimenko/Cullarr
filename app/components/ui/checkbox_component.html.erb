@@ -1,0 +1,14 @@
+<%= tag.div(**wrapper_attributes) do %>
+  <% if include_hidden %>
+    <%= tag.input(type: :hidden, name: name, value: unchecked_value, disabled: disabled ? true : nil) %>
+  <% end %>
+
+  <label class="ui-checkbox-label" for="<%= id %>">
+    <%= tag.input(**input_attributes) %>
+    <span><%= label %></span>
+  </label>
+
+  <% if help_text.present? %>
+    <p class="ui-help"><%= help_text %></p>
+  <% end %>
+<% end %>

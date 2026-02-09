@@ -1,0 +1,13 @@
+<%= tag.div(**wrapper_attributes) do %>
+  <% if include_hidden %>
+    <%= tag.input(type: :hidden, name: name, value: unchecked_value, disabled: disabled ? true : nil) %>
+  <% end %>
+
+  <label class="ui-switch" for="<%= id %>">
+    <%= tag.input(**input_attributes) %>
+    <span class="ui-switch-track" aria-hidden="true">
+      <span class="ui-switch-thumb"></span>
+    </span>
+    <span class="ui-switch-text"><%= label %></span>
+  </label>
+<% end %>

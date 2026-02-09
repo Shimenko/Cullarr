@@ -1,0 +1,15 @@
+<%= tag.div(**wrapper_attributes) do %>
+  <% if label.present? %>
+    <%= tag.label(label, for: id, class: "ui-field-label") %>
+  <% end %>
+
+  <%= tag.input(**input_attributes) %>
+
+  <% if help_text.present? %>
+    <p id="<%= help_id %>" class="ui-help"><%= help_text %></p>
+  <% end %>
+
+  <% if error_text.present? %>
+    <p id="<%= error_id %>" class="ui-field-error"><%= error_text %></p>
+  <% end %>
+<% end %>

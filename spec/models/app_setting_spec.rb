@@ -60,7 +60,7 @@ RSpec.describe AppSetting, type: :model do
         source: "env"
       )
       expect(settings["integration_allowed_network_ranges"]).to eq(
-        value: [ "192.168.1.0/24", "10.0.0.0/24" ],
+        value: %w[192.168.1.0/24 10.0.0.0/24],
         source: "env"
       )
     end

@@ -11,7 +11,7 @@ RSpec.describe ActiveRecordEncryptionConfig do
         }
       )
 
-      expect(keys).to eq([ [ "old-key", "new-key" ], "det-key", "salt-key" ])
+      expect(keys).to eq([ %w[old-key new-key], "det-key", "salt-key" ])
     end
 
     it "raises in production when keys are missing" do

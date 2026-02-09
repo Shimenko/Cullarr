@@ -1,0 +1,23 @@
+<%= tag.div(**wrapper_attributes) do %>
+  <% if label.present? %>
+    <%= tag.label(label, for: id, class: "ui-field-label") %>
+  <% end %>
+
+  <%= tag.select(**select_attributes) do %>
+    <% if include_blank.present? %>
+      <%= tag.option(include_blank, value: "") %>
+    <% end %>
+
+    <% options.each do |option_label, option_value| %>
+      <%= tag.option(option_label, value: option_value, selected: option_selected?(option_value) ? true : nil) %>
+    <% end %>
+  <% end %>
+
+  <% if help_text.present? %>
+    <p id="<%= help_id %>" class="ui-help"><%= help_text %></p>
+  <% end %>
+
+  <% if error_text.present? %>
+    <p id="<%= error_id %>" class="ui-field-error"><%= error_text %></p>
+  <% end %>
+<% end %>

@@ -1,0 +1,18 @@
+<% attributes = button_attributes %>
+<% body = capture do %>
+  <% if show_icon? && leading_icon? %>
+    <%= render Ui::IconComponent.new(name: icon_name, size: icon_size, class_name: "ui-button-icon") %>
+  <% end %>
+  <% if content_text.present? %>
+    <span class="ui-button-label"><%= content_text %></span>
+  <% end %>
+  <% if show_icon? && trailing_icon? %>
+    <%= render Ui::IconComponent.new(name: icon_name, size: icon_size, class_name: "ui-button-icon") %>
+  <% end %>
+<% end %>
+
+<% if href.present? %>
+  <%= tag.a(**attributes) { body } %>
+<% else %>
+  <%= tag.button(**attributes) { body } %>
+<% end %>

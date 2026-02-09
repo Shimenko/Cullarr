@@ -6,14 +6,14 @@
 }
 
 .ui-app {
-  font-family: var(--font-sans);
+  font-family: var(--font-sans), serif;
 }
 
 .ui-code,
 code,
 kbd,
 pre {
-  font-family: var(--font-mono);
+  font-family: var(--font-mono), serif;
 }
 
 .ui-text-display {

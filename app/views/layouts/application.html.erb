@@ -52,8 +52,10 @@
 
     <main class="ui-shell-container ui-main">
       <% flash.each do |key, message| %>
-        <% alert_classes = key.to_s == "alert" ? "ui-flash ui-flash-alert" : "ui-flash ui-flash-notice" %>
-        <p class="<%= alert_classes %>"><%= message %></p>
+        <%= render Ui::InlineAlertComponent.new(
+          message: message,
+          kind: Ui::InlineAlertComponent.kind_for_flash_key(key)
+        ) %>
       <% end %>
 
       <%= yield %>

@@ -7,6 +7,12 @@ Rails.application.routes.draw do
   root "dashboard#show"
 
   get "dashboard", to: "dashboard#show"
+  get "ui",
+      to: "ui/styleguide#show",
+      as: :ui_styleguide,
+      constraints: lambda { |_request|
+        Rails.env.development? || Rails.env.test?
+      }
   resource :settings, only: %i[show update], controller: :settings
   get "runs", to: "runs#index"
 

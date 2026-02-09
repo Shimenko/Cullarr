@@ -1,0 +1,11 @@
+<%= tag.div(**alert_attributes) do %>
+  <span class="ui-inline-alert-icon" aria-hidden="true">
+    <%= render Ui::IconComponent.new(name: icon_name, size: :sm) %>
+  </span>
+  <div class="ui-inline-alert-content">
+    <% if title.present? %>
+      <p class="ui-inline-alert-title"><%= title %></p>
+    <% end %>
+    <p class="ui-inline-alert-message"><%= message %></p>
+  </div>
+<% end %>
