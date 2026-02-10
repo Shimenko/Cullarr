@@ -40,7 +40,7 @@ module Sync
         )
       end
 
-      RunProgressBroadcaster.broadcast
+      RunProgressBroadcaster.broadcast(sync_run: sync_run, correlation_id: correlation_id)
       true
     end
 
@@ -51,7 +51,7 @@ module Sync
         phase_counts_json: phase_counts,
         finished_at: Time.current
       )
-      RunProgressBroadcaster.broadcast
+      RunProgressBroadcaster.broadcast(sync_run: sync_run, correlation_id: correlation_id)
     end
 
     def transition_to_failed!(error)
@@ -61,7 +61,7 @@ module Sync
         error_message: error.message.to_s.truncate(500),
         finished_at: Time.current
       )
-      RunProgressBroadcaster.broadcast
+      RunProgressBroadcaster.broadcast(sync_run: sync_run, correlation_id: correlation_id)
     end
 
     def enqueue_coalesced_run_if_needed

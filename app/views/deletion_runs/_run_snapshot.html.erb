@@ -1,0 +1,61 @@
+<%= render Ui::PanelComponent.new(
+  title: "Deletion Run ##{deletion_run.id}",
+  subtitle: "Scope: #{deletion_run.scope} · Status: #{deletion_run.status}",
+  padding: :lg
+) do %>
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <div class="flex flex-wrap gap-2">
+      <%= render Ui::ChipComponent.new(label: deletion_run.status, kind: deletion_run.status == "failed" ? :danger : :info) %>
+      <%= render Ui::ChipComponent.new(label: "Scope #{deletion_run.scope}", kind: :instance) %>
+    </div>
+    <%= link_to "Back to Runs", runs_path, class: "ui-nav-link" %>
+  </div>
+
+  <% summary = deletion_run.as_api_json[:summary] %>
+  <dl class="mt-4 grid gap-2 md:grid-cols-4">
+    <div class="rounded-lg border ui-border p-3">
+      <dt class="ui-help">Queued</dt>
+      <dd class="ui-subheading"><%= summary[:queued] %></dd>
+    </div>
+    <div class="rounded-lg border ui-border p-3">
+      <dt class="ui-help">Running</dt>
+      <dd class="ui-subheading"><%= summary[:running] %></dd>
+    </div>
+    <div class="rounded-lg border ui-border p-3">
+      <dt class="ui-help">Confirmed</dt>
+      <dd class="ui-subheading"><%= summary[:confirmed] %></dd>
+    </div>
+    <div class="rounded-lg border ui-border p-3">
+      <dt class="ui-help">Failed</dt>
+      <dd class="ui-subheading"><%= summary[:failed] %></dd>
+    </div>
+  </dl>
+
+  <table class="ui-table mt-4" aria-label="Deletion actions">
+    <thead>
+      <tr>
+        <th scope="col">Action</th>
+        <th scope="col">Media File</th>
+        <th scope="col">Status</th>
+        <th scope="col">Warnings</th>
+        <th scope="col">Error Code</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% deletion_run.deletion_actions.order(:id).each do |action| %>
+        <tr id="deletion-action-<%= action.id %>">
+          <td>#<%= action.id %></td>
+          <td><%= action.media_file_id %></td>
+          <td><%= action.status %></td>
+          <td><%= action.warning_codes.join(", ").presence || "-" %></td>
+          <td><%= action.error_code.presence || "-" %></td>
+        </tr>
+      <% end %>
+      <% if deletion_run.deletion_actions.empty? %>
+        <tr>
+          <td colspan="5">No actions are attached to this run.</td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+<% end %>

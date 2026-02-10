@@ -1,0 +1,9 @@
+<%= turbo_stream_from "deletion_runs" %>
+
+<section data-controller="stream-status">
+  <p class="ui-help" data-stream-status-target="deletionStatus">Live deletion updates will appear here.</p>
+
+  <div id="deletion-run-snapshot">
+    <%= render "run_snapshot", deletion_run: @deletion_run %>
+  </div>
+</section>

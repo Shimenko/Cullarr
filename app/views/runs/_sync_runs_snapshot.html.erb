@@ -3,12 +3,35 @@
     <%= button_to "Sync now", runs_sync_now_path, method: :post, class: "ui-button ui-button-primary" %>
   </div>
 
+  <div class="mt-3 space-y-1">
+    <p class="ui-copy">
+      Scheduled sync:
+      <strong><%= sync_enabled ? "enabled" : "disabled" %></strong>
+      <% if sync_enabled %>
+        every <%= sync_interval_minutes %> minute(s)
+      <% end %>
+    </p>
+    <p class="ui-copy">
+      Last successful sync:
+      <%= last_successful_sync&.finished_at&.strftime("%Y-%m-%d %H:%M:%S") || "none yet" %>
+    </p>
+    <p class="ui-copy">
+      Next scheduled sync:
+      <%= next_scheduled_sync_at&.strftime("%Y-%m-%d %H:%M:%S") || "n/a" %>
+    </p>
+  </div>
+
   <% if running_sync_run.present? %>
     <p class="ui-copy">
       Active run <code>#<%= running_sync_run.id %></code>:
       <strong><%= running_sync_run.phase.presence || "starting" %></strong>
       (<%= running_sync_run.trigger %>)
     </p>
+    <% if running_sync_run.queued_next? %>
+      <p class="ui-copy">
+        <%= render Ui::ChipComponent.new(label: "Sync queued next", kind: :warning) %>
+      </p>
+    <% end %>
   <% else %>
     <p class="ui-copy">No sync run is currently active.</p>
   <% end %>

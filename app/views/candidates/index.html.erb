@@ -1,0 +1,268 @@
+<section
+  data-controller="candidates-workflow"
+  data-candidates-workflow-scope-value="<%= @scope %>"
+  data-candidates-workflow-unlock-url-value="<%= api_v1_delete_mode_unlock_path %>"
+  data-candidates-workflow-plan-url-value="<%= plan_api_v1_deletion_runs_path %>"
+  data-candidates-workflow-create-url-value="<%= api_v1_deletion_runs_path %>"
+  data-candidates-workflow-run-path-template-value="<%= deletion_run_path("__RUN_ID__") %>">
+  <%= render Ui::PanelComponent.new(
+    title: "Candidates",
+    subtitle: "Unified candidate view across integrations with strict guardrail visibility.",
+    padding: :lg
+  ) do %>
+    <%= form_with url: candidates_path, method: :get, class: "grid gap-4 md:grid-cols-3", scope: nil do %>
+      <%= render Ui::SelectComponent.new(
+        name: "scope",
+        label: "Scope",
+        options: candidate_scope_options,
+        selected: @scope
+      ) %>
+
+      <%= render Ui::CheckboxComponent.new(
+        name: "include_blocked",
+        label: "Include blocked candidates",
+        value: "true",
+        include_hidden: false,
+        checked: @include_blocked
+      ) %>
+
+      <div class="md:col-span-3">
+        <p class="ui-help mb-2">Plex users (defaults to all)</p>
+
+        <% if @plex_users.any? %>
+          <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <% @plex_users.each do |plex_user| %>
+              <%= render Ui::CheckboxComponent.new(
+                name: "plex_user_ids[]",
+                label: plex_user.friendly_name,
+                value: plex_user.id.to_s,
+                include_hidden: false,
+                checked: @selected_plex_user_ids.include?(plex_user.id),
+                id: "candidate_plex_user_#{plex_user.id}",
+                data: { "candidates-workflow-target": "plexUserCheckbox", action: "change->candidates-workflow#selectionChanged" }
+              ) %>
+            <% end %>
+          </div>
+        <% else %>
+          <p class="ui-copy">No Plex users synced yet. Sync first to evaluate watched criteria.</p>
+        <% end %>
+      </div>
+
+      <div class="md:col-span-3">
+        <%= render Ui::ButtonComponent.new(label: "Apply Filters", type: :submit, variant: :primary) %>
+      </div>
+    <% end %>
+  <% end %>
+
+  <%= render Ui::PanelComponent.new(
+    title: "#{candidate_scope_label(@scope)} Results",
+    subtitle: "#{@items.size} item(s) shown",
+    padding: :lg
+  ) do %>
+    <% if @items.any? %>
+      <div class="space-y-4">
+        <% @items.each do |item| %>
+          <% blocked = item[:blocker_flags].any? %>
+          <% selection_id = candidate_selection_id(item) %>
+          <% required_groups = item[:multi_version_groups].keys.join(",") %>
+          <article class="rounded-lg border ui-border p-4 ui-hover-row space-y-3" data-testid="candidate-row-<%= item[:id] %>">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div class="space-y-2">
+                <div class="flex flex-wrap items-center gap-2">
+                  <input
+                    id="candidate_select_<%= item[:id].tr(":", "_") %>"
+                    type="checkbox"
+                    value="<%= item[:id] %>"
+                    <%= blocked ? "disabled" : "" %>
+                    data-candidates-workflow-target="candidateCheckbox"
+                    data-candidate-id="<%= item[:id] %>"
+                    data-selection-id="<%= selection_id %>"
+                    data-required-groups="<%= required_groups %>"
+                    data-action="change->candidates-workflow#selectionChanged">
+                  <label class="ui-copy ui-text-primary font-semibold" for="candidate_select_<%= item[:id].tr(":", "_") %>">
+                    <%= item[:title] %>
+                  </label>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <%= render Ui::ChipComponent.new(
+                    label: blocked ? "Blocked" : "Eligible",
+                    kind: blocked ? :blocker : :success
+                  ) %>
+                  <%= render Ui::ChipComponent.new(
+                    label: candidate_scope_label(item[:scope]),
+                    kind: :info
+                  ) %>
+                  <% item[:integration_chips].each do |chip_label| %>
+                    <%= render Ui::ChipComponent.new(label: chip_label, kind: :instance) %>
+                  <% end %>
+                </div>
+              </div>
+
+              <div class="text-right">
+                <p class="ui-help">Reclaimable</p>
+                <p class="ui-subheading"><%= number_to_human_size(item[:reclaimable_bytes], precision: 2, strip_insignificant_zeros: true) %></p>
+              </div>
+            </div>
+
+            <p class="ui-copy"><%= candidate_watched_summary_text(item[:watched_summary]) %></p>
+
+            <% if item[:multi_version_groups].any? %>
+              <div class="rounded-lg border ui-border p-3">
+                <p class="ui-help mb-2">Explicit version selection required before delete planning.</p>
+                <% item[:multi_version_groups].each do |group_key, file_ids| %>
+                  <div class="mb-2">
+                    <p class="ui-copy"><%= candidate_group_label(group_key) %></p>
+                    <div class="flex flex-wrap gap-3 mt-1">
+                      <% file_ids.each do |file_id| %>
+                        <label class="ui-copy inline-flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            value="<%= file_id %>"
+                            <%= blocked ? "disabled" : "" %>
+                            data-candidates-workflow-target="versionCheckbox"
+                            data-group-key="<%= group_key %>"
+                            data-candidate-id="<%= item[:id] %>"
+                            data-action="change->candidates-workflow#selectionChanged">
+                          media_file_id <%= file_id %>
+                        </label>
+                      <% end %>
+                    </div>
+                  </div>
+                <% end %>
+              </div>
+            <% end %>
+
+            <% if item[:risk_flags].any? %>
+              <div class="space-y-1">
+                <p class="ui-help">Risk flags</p>
+                <div class="flex flex-wrap gap-2">
+                  <% item[:risk_flags].each do |flag| %>
+                    <%= render Ui::ChipComponent.new(label: candidate_flag_label(flag), kind: :risk) %>
+                  <% end %>
+                </div>
+              </div>
+            <% end %>
+
+            <% if item[:blocker_flags].any? %>
+              <div class="space-y-1">
+                <p class="ui-help">Blockers</p>
+                <div class="flex flex-wrap gap-2">
+                  <% item[:blocker_flags].each do |flag| %>
+                    <%= render Ui::ChipComponent.new(
+                      label: candidate_flag_label(flag),
+                      kind: :blocker,
+                      title: candidate_blocker_hint(flag)
+                    ) %>
+                  <% end %>
+                </div>
+              </div>
+            <% end %>
+
+            <details>
+              <summary class="ui-copy cursor-pointer">Reasons and file context</summary>
+              <div class="ui-row-expand-content">
+                <ul class="list-disc pl-5 space-y-1 ui-copy">
+                  <% item[:reasons].each do |reason| %>
+                    <li><%= candidate_reason_label(reason) %></li>
+                  <% end %>
+                </ul>
+                <p class="ui-help mt-2">
+                  Media file IDs:
+                  <%= item[:media_file_ids].join(", ") %>
+                </p>
+              </div>
+            </details>
+          </article>
+        <% end %>
+      </div>
+
+      <% if @next_cursor.present? %>
+        <p class="ui-help mt-4">Additional results exist. Refine filters to narrow this page.</p>
+      <% end %>
+    <% else %>
+      <%= render Ui::InlineAlertComponent.new(
+        kind: :info,
+        title: "No candidates available",
+        message: "Try a different scope, include blocked items, or run sync to refresh inventory."
+      ) %>
+    <% end %>
+  <% end %>
+
+  <%= render Ui::PanelComponent.new(
+    title: "Deletion Review",
+    subtitle: "Unlock delete mode, review server-planned side effects, then hold-to-confirm execution.",
+    padding: :lg
+  ) do %>
+    <div class="grid gap-3 md:grid-cols-2">
+      <div class="space-y-2">
+        <label class="ui-field-label" for="delete_mode_password">Delete mode password</label>
+        <input id="delete_mode_password" type="password" class="ui-control" data-candidates-workflow-target="unlockPassword" autocomplete="current-password">
+        <%= render Ui::ButtonComponent.new(
+          label: "Unlock Delete Mode",
+          variant: :secondary,
+          type: :button,
+          data: { action: "click->candidates-workflow#unlockDeleteMode" }
+        ) %>
+        <p class="ui-help" data-candidates-workflow-target="unlockStatus">Delete mode is locked.</p>
+      </div>
+
+      <div class="space-y-2">
+        <%= render Ui::ButtonComponent.new(
+          label: "Review Deletion Plan",
+          variant: :primary,
+          type: :button,
+          disabled: true,
+          data: {
+            action: "click->candidates-workflow#reviewPlan",
+            "candidates-workflow-target": "planButton"
+          }
+        ) %>
+        <p class="ui-help" data-candidates-workflow-target="planStatus">Select candidates and unlock delete mode to continue.</p>
+      </div>
+    </div>
+
+    <div class="mt-4 rounded-lg border ui-border p-4" data-candidates-workflow-target="planSummary" hidden>
+      <h4 class="ui-subheading">Plan Summary</h4>
+      <dl class="grid gap-2 md:grid-cols-2 mt-2">
+        <div>
+          <dt class="ui-help">Target count</dt>
+          <dd class="ui-copy" data-candidates-workflow-target="planTargetCount">0</dd>
+        </div>
+        <div>
+          <dt class="ui-help">Total reclaimable bytes</dt>
+          <dd class="ui-copy" data-candidates-workflow-target="planTotalBytes">0</dd>
+        </div>
+      </dl>
+
+      <div class="mt-3">
+        <p class="ui-help">Warnings</p>
+        <ul class="list-disc pl-5 ui-copy" data-candidates-workflow-target="planWarnings"></ul>
+      </div>
+
+      <div class="mt-3">
+        <p class="ui-help">Blockers</p>
+        <ul class="list-disc pl-5 ui-copy" data-candidates-workflow-target="planBlockers"></ul>
+      </div>
+
+      <div class="mt-3">
+        <p class="ui-help">Execution side effects (server-derived)</p>
+        <ul class="list-disc pl-5 ui-copy" data-candidates-workflow-target="planSideEffects"></ul>
+      </div>
+    </div>
+
+    <div class="mt-4">
+      <button
+        type="button"
+        class="ui-button ui-button-danger ui-hold-confirm"
+        disabled
+        data-controller="hold-to-confirm"
+        data-hold-to-confirm-duration-value="1000"
+        data-hold-to-confirm-confirmed-text-value="Deleting..."
+        data-candidates-workflow-target="confirmButton"
+        data-action="pointerdown->hold-to-confirm#start pointerup->hold-to-confirm#cancel pointerleave->hold-to-confirm#cancel pointercancel->hold-to-confirm#cancel mousedown->hold-to-confirm#start mouseup->hold-to-confirm#cancel mouseleave->hold-to-confirm#cancel touchstart->hold-to-confirm#start touchend->hold-to-confirm#cancel keydown->hold-to-confirm#start keyup->hold-to-confirm#cancel blur->hold-to-confirm#cancel hold-to-confirm:confirmed->candidates-workflow#executeDeletionRun">
+        <span class="ui-hold-confirm-progress" data-hold-to-confirm-target="progress"></span>
+        <span class="ui-button-label" data-hold-to-confirm-target="label">Hold to confirm deletion</span>
+      </button>
+    </div>
+  <% end %>
+</section>

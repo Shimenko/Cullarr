@@ -387,7 +387,8 @@ module Candidates
         movie_id: movie.id,
         year: movie.year,
         version_count: media_files.size,
-        media_file_ids: media_files.map(&:id)
+        media_file_ids: media_files.map(&:id),
+        multi_version_groups: multi_version_groups_for_movie(movie:, media_files:)
       }
     end
 
@@ -409,7 +410,8 @@ module Candidates
         series_id: episode.season&.series_id,
         season_number: episode.season&.season_number,
         episode_number: episode.episode_number,
-        media_file_ids: snapshot[:media_files].map(&:id)
+        media_file_ids: snapshot[:media_files].map(&:id),
+        multi_version_groups: multi_version_groups_for_episode(episode:, media_files: snapshot[:media_files])
       }
     end
 
@@ -441,7 +443,8 @@ module Candidates
         season_number: season.season_number,
         episode_count: episode_count,
         eligible_episode_count: eligible_episode_count,
-        media_file_ids: media_files.map(&:id)
+        media_file_ids: media_files.map(&:id),
+        multi_version_groups: multi_version_groups_for_snapshots(snapshots:)
       }
     end
 
@@ -473,8 +476,30 @@ module Candidates
         season_count: series.seasons.size,
         episode_count: episode_count,
         eligible_episode_count: eligible_episode_count,
-        media_file_ids: media_files.map(&:id)
+        media_file_ids: media_files.map(&:id),
+        multi_version_groups: multi_version_groups_for_snapshots(snapshots:)
       }
+    end
+
+    def multi_version_groups_for_movie(movie:, media_files:)
+      return {} unless media_files.size > 1
+
+      { "movie:#{movie.id}" => media_files.map(&:id) }
+    end
+
+    def multi_version_groups_for_episode(episode:, media_files:)
+      return {} unless media_files.size > 1
+
+      { "episode:#{episode.id}" => media_files.map(&:id) }
+    end
+
+    def multi_version_groups_for_snapshots(snapshots:)
+      snapshots.each_with_object({}) do |snapshot, groups|
+        media_file_ids = snapshot.fetch(:media_files).map(&:id)
+        next if media_file_ids.size <= 1
+
+        groups["episode:#{snapshot.fetch(:episode).id}"] = media_file_ids
+      end
     end
 
     def episode_snapshots_for(episodes:, selected_user_ids:)

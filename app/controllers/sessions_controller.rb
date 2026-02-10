@@ -16,6 +16,7 @@ class SessionsController < ApplicationController
 
   def destroy
     clear_reauthentication!
+    clear_cable_auth_cookie!
     reset_session
     redirect_to new_session_path, notice: "Signed out."
   end
@@ -58,7 +59,28 @@ class SessionsController < ApplicationController
     clear_reauthentication!
     reset_session
     session[:operator_id] = operator.id
+    set_cable_auth_cookie!(operator)
     operator.update!(last_login_at: Time.current)
+  end
+
+  def set_cable_auth_cookie!(operator)
+    cookies.signed[ApplicationCable::Connection::CABLE_OPERATOR_COOKIE] = {
+      value: operator.id,
+      httponly: true,
+      same_site: :lax,
+      secure: Rails.env.production?,
+      path: "/"
+    }
+  end
+
+  def clear_cable_auth_cookie!
+    cookies.delete(
+      ApplicationCable::Connection::CABLE_OPERATOR_COOKIE,
+      httponly: true,
+      same_site: :lax,
+      secure: Rails.env.production?,
+      path: "/"
+    )
   end
 
   def login_params

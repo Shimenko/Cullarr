@@ -1,0 +1,44 @@
+<%= render Ui::PanelComponent.new(title: "Deletion Runs", subtitle: "Current and recent deletion operations") do %>
+  <% if running_deletion_run.present? %>
+    <p class="ui-copy">
+      Active deletion run <code>#<%= running_deletion_run.id %></code>
+      (<%= running_deletion_run.scope %>, <strong><%= running_deletion_run.status %></strong>)
+      <%= link_to "Open", deletion_run_path(running_deletion_run), class: "ui-nav-link" %>
+    </p>
+  <% else %>
+    <p class="ui-copy">No deletion run is currently active.</p>
+  <% end %>
+
+  <table class="ui-table" aria-label="Recent deletion runs">
+    <thead>
+      <tr>
+        <th scope="col">Run</th>
+        <th scope="col">Status</th>
+        <th scope="col">Scope</th>
+        <th scope="col">Confirmed</th>
+        <th scope="col">Failed</th>
+        <th scope="col">Started</th>
+        <th scope="col">Finished</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% recent_deletion_runs.each do |deletion_run| %>
+        <% summary = deletion_summary_by_run_id.fetch(deletion_run.id, DeletionRun.default_action_summary) %>
+        <tr id="deletion-run-<%= deletion_run.id %>">
+          <td><%= link_to "##{deletion_run.id}", deletion_run_path(deletion_run) %></td>
+          <td><%= deletion_run.status %></td>
+          <td><%= deletion_run.scope %></td>
+          <td><%= summary[:confirmed] %></td>
+          <td><%= summary[:failed] %></td>
+          <td><%= deletion_run.started_at&.strftime("%Y-%m-%d %H:%M:%S") || "-" %></td>
+          <td><%= deletion_run.finished_at&.strftime("%Y-%m-%d %H:%M:%S") || "-" %></td>
+        </tr>
+      <% end %>
+      <% if recent_deletion_runs.empty? %>
+        <tr>
+          <td colspan="7">No deletion runs have executed yet.</td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+<% end %>

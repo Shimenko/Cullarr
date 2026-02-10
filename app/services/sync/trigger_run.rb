@@ -29,7 +29,9 @@ module Sync
       end
 
       enqueue!(sync_run_to_enqueue) if sync_run_to_enqueue.present?
-      RunProgressBroadcaster.broadcast if result&.state.in?([ :queued, :queued_next ])
+      if result&.state.in?([ :queued, :queued_next ])
+        RunProgressBroadcaster.broadcast(sync_run: result.sync_run, correlation_id: correlation_id)
+      end
       result
     end
 

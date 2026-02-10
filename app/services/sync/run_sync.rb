@@ -33,7 +33,7 @@ module Sync
     def run_phase!(phase_name:, service_class:)
       sync_run.update!(phase: phase_name.to_s)
       record_phase_started!(phase_name:)
-      RunProgressBroadcaster.broadcast
+      RunProgressBroadcaster.broadcast(sync_run: sync_run, correlation_id: correlation_id)
 
       phase_counts = service_class.new(sync_run:, correlation_id: correlation_id).call
 
@@ -41,7 +41,7 @@ module Sync
         phase_counts_json: sync_run.phase_counts_json.merge(phase_name.to_s => phase_counts)
       )
       record_phase_completed!(phase_name:, phase_counts:)
-      RunProgressBroadcaster.broadcast
+      RunProgressBroadcaster.broadcast(sync_run: sync_run, correlation_id: correlation_id)
       phase_counts
     end
 

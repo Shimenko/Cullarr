@@ -26,6 +26,19 @@ RSpec.describe "Sessions", type: :request do
     expect(response.body).to include("ui-inline-alert ui-inline-alert-success")
   end
 
+  it "sets and clears the signed cable operator cookie on sign-in/sign-out" do
+    operator = Operator.create!(email: "owner@example.com", password: "password123", password_confirmation: "password123")
+    cookie_name = ApplicationCable::Connection::CABLE_OPERATOR_COOKIE
+
+    post "/session", params: { session: { email: operator.email, password: "password123" } }
+    sign_in_set_cookie_header = Array(response.headers["Set-Cookie"]).join("\n")
+    expect(sign_in_set_cookie_header).to include("#{cookie_name}=")
+
+    delete "/session"
+    sign_out_set_cookie_header = Array(response.headers["Set-Cookie"]).join("\n")
+    expect(sign_out_set_cookie_header).to include("#{cookie_name}=;")
+  end
+
   it "rejects invalid credentials" do
     operator = Operator.create!(email: "owner@example.com", password: "password123", password_confirmation: "password123")
 

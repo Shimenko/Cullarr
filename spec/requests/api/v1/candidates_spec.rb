@@ -107,6 +107,7 @@ RSpec.describe "Api::V1::Candidates", type: :request do
       expect(row.fetch("id")).to eq("movie:#{movie.id}")
       expect(row.fetch("candidate_id")).to eq("movie:#{movie.id}")
       expect(row.fetch("version_count")).to eq(2)
+      expect(row.fetch("multi_version_groups")).to eq({ "movie:#{movie.id}" => row.fetch("media_file_ids") })
       expect(row.fetch("risk_flags")).to include("multiple_versions")
       expect(row.fetch("blocker_flags")).to eq([])
       expect(row.dig("watched_summary", "all_selected_users_watched")).to be(true)

@@ -14,6 +14,8 @@ Rails.application.routes.draw do
         Rails.env.development? || Rails.env.test?
       }
   resource :settings, only: %i[show update], controller: :settings
+  resources :candidates, only: :index
+  resources :deletion_runs, only: :show, path: "deletion-runs"
   get "runs", to: "runs#index"
   post "runs/sync-now", to: "runs#sync_now", as: :runs_sync_now
 

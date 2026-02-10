@@ -1,5 +1,24 @@
 <%= turbo_stream_from "sync_runs" %>
+<%= turbo_stream_from "deletion_runs" %>
 
-<div id="sync-runs-snapshot">
-  <%= render "sync_runs_snapshot", running_sync_run: @running_sync_run, recent_sync_runs: @recent_sync_runs %>
-</div>
+<section data-controller="stream-status">
+  <p class="ui-help" data-stream-status-target="syncStatus">Live sync updates will appear here.</p>
+  <p class="ui-help" data-stream-status-target="deletionStatus">Live deletion updates will appear here.</p>
+
+  <div id="sync-runs-snapshot">
+    <%= render "sync_runs_snapshot",
+               running_sync_run: @running_sync_run,
+               recent_sync_runs: @recent_sync_runs,
+               sync_enabled: @sync_enabled,
+               sync_interval_minutes: @sync_interval_minutes,
+               last_successful_sync: @last_successful_sync,
+               next_scheduled_sync_at: @next_scheduled_sync_at %>
+  </div>
+
+  <div id="deletion-runs-snapshot" class="mt-6">
+    <%= render "deletion_runs_snapshot",
+               running_deletion_run: @running_deletion_run,
+               recent_deletion_runs: @recent_deletion_runs,
+               deletion_summary_by_run_id: @deletion_summary_by_run_id %>
+  </div>
+</section>

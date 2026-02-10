@@ -1,4 +1,5 @@
 class DeletionRun < ApplicationRecord
+  SUMMARY_STATUSES = %w[queued running confirmed failed deleted unmonitored tagged].freeze
   STATUSES = %w[queued running success partial_failure failed canceled].freeze
   SCOPES = %w[movie tv_show tv_season tv_episode].freeze
 
@@ -10,6 +11,32 @@ class DeletionRun < ApplicationRecord
 
   validates :scope, inclusion: { in: SCOPES }
   validates :status, inclusion: { in: STATUSES }
+
+  class << self
+    def action_summary_by_run_id(run_ids)
+      normalized_run_ids = Array(run_ids)
+        .map { |run_id| Integer(run_id, exception: false) }
+        .compact
+        .uniq
+      return {} if normalized_run_ids.empty?
+
+      grouped_counts = DeletionAction
+        .where(deletion_run_id: normalized_run_ids, status: SUMMARY_STATUSES)
+        .group(:deletion_run_id, :status)
+        .count
+
+      normalized_run_ids.each_with_object({}) do |run_id, summaries|
+        summaries[run_id] = default_action_summary.merge(
+          SUMMARY_STATUSES.index_with { |status| grouped_counts.fetch([ run_id, status ], 0) }
+                         .transform_keys(&:to_sym)
+        )
+      end
+    end
+
+    def default_action_summary
+      SUMMARY_STATUSES.index_with(0).transform_keys(&:to_sym)
+    end
+  end
 
   def selected_plex_user_ids
     Array(selected_plex_user_ids_json).map { |id| Integer(id, exception: false) }.compact.select(&:positive?).uniq
@@ -34,15 +61,6 @@ class DeletionRun < ApplicationRecord
   private
 
   def action_summary
-    grouped = deletion_actions.group(:status).count
-    {
-      queued: grouped.fetch("queued", 0),
-      running: grouped.fetch("running", 0),
-      confirmed: grouped.fetch("confirmed", 0),
-      failed: grouped.fetch("failed", 0),
-      deleted: grouped.fetch("deleted", 0),
-      unmonitored: grouped.fetch("unmonitored", 0),
-      tagged: grouped.fetch("tagged", 0)
-    }
+    self.class.action_summary_by_run_id([ id ]).fetch(id, self.class.default_action_summary)
   end
 end
