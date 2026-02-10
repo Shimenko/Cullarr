@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_02_08_222435) do
+ActiveRecord::Schema[8.0].define(version: 2026_02_09_184716) do
   create_table "app_settings", force: :cascade do |t|
     t.string "key", null: false
     t.json "value_json", default: {}, null: false
@@ -227,6 +227,17 @@ ActiveRecord::Schema[8.0].define(version: 2026_02_08_222435) do
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.index ["tautulli_user_id"], name: "index_plex_users_on_tautulli_user_id", unique: true
+  end
+
+  create_table "saved_views", force: :cascade do |t|
+    t.string "name", null: false
+    t.string "scope", null: false
+    t.json "filters_json", default: {}, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["name"], name: "index_saved_views_on_name", unique: true
+    t.index ["scope"], name: "index_saved_views_on_scope"
+    t.check_constraint "scope IN ('movie','tv_show','tv_season','tv_episode')", name: "saved_views_scope_check"
   end
 
   create_table "seasons", force: :cascade do |t|
