@@ -49,7 +49,7 @@
         <% running_progress[:phase_states].each do |phase_state| %>
           <li class="ui-run-phase-item ui-run-phase-item-<%= phase_state[:state] %>">
             <span class="ui-run-phase-item-label"><%= sync_run_phase_label(phase_state[:phase]) %></span>
-            <span class="ui-run-phase-item-state"><%= phase_state[:state] %></span>
+            <span class="ui-run-phase-item-state"><%= sync_phase_progress_text(phase_state) %></span>
           </li>
         <% end %>
       </ol>

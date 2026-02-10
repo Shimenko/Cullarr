@@ -15,7 +15,7 @@ RSpec.describe SyncRun, type: :model do
   end
 
   describe "#progress_snapshot" do
-    it "reports aggregate progress for running runs" do
+    it "reports aggregate progress for running runs when only phase completion is known" do
       progress = running_sync_run.progress_snapshot
 
       expect(progress[:total_phases]).to eq(7)
@@ -23,7 +23,8 @@ RSpec.describe SyncRun, type: :model do
       expect(progress[:current_phase]).to eq("tautulli_history")
       expect(progress[:current_phase_label]).to eq("Tautulli History")
       expect(progress[:current_phase_index]).to eq(4)
-      expect(progress[:percent_complete]).to eq(35.7)
+      expect(progress[:current_phase_percent]).to eq(0.0)
+      expect(progress[:percent_complete]).to eq(28.6)
     end
 
     it "labels each phase with a renderable state" do
@@ -31,9 +32,42 @@ RSpec.describe SyncRun, type: :model do
 
       expect(progress[:percent_complete]).to be > 0
       expect(progress[:phase_states]).to include(
-        { phase: "sonarr_inventory", label: "Sonarr Inventory", state: "complete" },
-        { phase: "radarr_inventory", label: "Radarr Inventory", state: "complete" },
-        { phase: "tautulli_history", label: "Tautulli History", state: "current" }
+        hash_including(phase: "sonarr_inventory", label: "Sonarr Inventory", state: "complete"),
+        hash_including(phase: "radarr_inventory", label: "Radarr Inventory", state: "complete"),
+        hash_including(phase: "tautulli_history", label: "Tautulli History", state: "current")
+      )
+    end
+
+    it "uses data-driven phase totals when progress metadata is present" do
+      sync_run = described_class.create!(
+        status: "running",
+        trigger: "manual",
+        phase: "radarr_inventory",
+        phase_counts_json: {
+          "sonarr_inventory" => { "series_fetched" => 10 },
+          Sync::ProgressTracker::PROGRESS_KEY => {
+            "version" => 1,
+            "phases" => {
+              "sonarr_inventory" => { "state" => "complete", "total_units" => 100, "processed_units" => 100 },
+              "radarr_inventory" => { "state" => "current", "total_units" => 40, "processed_units" => 10 }
+            }
+          }
+        }
+      )
+
+      progress = sync_run.progress_snapshot
+
+      expect(progress[:current_phase_percent]).to eq(25.0)
+      expect(progress[:percent_complete]).to eq(17.9)
+      expect(progress[:phase_states]).to include(
+        {
+          phase: "radarr_inventory",
+          label: "Radarr Inventory",
+          state: "current",
+          total_units: 40,
+          processed_units: 10,
+          percent_complete: 25.0
+        }
       )
     end
 

@@ -31,7 +31,8 @@ module RunsHelper
 
   def sync_run_progress_caption(sync_run)
     progress = sync_run.progress_snapshot
-    "#{progress[:completed_phases]}/#{progress[:total_phases]} phases complete"
+    current_phase_percent = progress[:current_phase_percent].to_f.round(1)
+    "#{progress[:completed_phases]}/#{progress[:total_phases]} phases complete · current phase #{current_phase_percent}%"
   end
 
   def sync_run_duration_label(sync_run)
@@ -43,5 +44,15 @@ module RunsHelper
 
   def sync_run_timestamp(value)
     value&.strftime("%Y-%m-%d %H:%M:%S") || "-"
+  end
+
+  def sync_phase_progress_text(phase_state)
+    total_units = phase_state[:total_units].to_i
+    processed_units = phase_state[:processed_units].to_i
+    percent_complete = phase_state[:percent_complete].to_f.round(1)
+
+    return phase_state[:state] if total_units <= 0
+
+    "#{processed_units}/#{total_units} (#{percent_complete}%)"
   end
 end

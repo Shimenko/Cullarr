@@ -1,8 +1,9 @@
 module Sync
   class TautulliUsersSync
-    def initialize(sync_run:, correlation_id:)
+    def initialize(sync_run:, correlation_id:, phase_progress: nil)
       @sync_run = sync_run
       @correlation_id = correlation_id
+      @phase_progress = phase_progress
     end
 
     def call
@@ -18,8 +19,10 @@ module Sync
         counts[:integrations] += 1
 
         users = Integrations::TautulliAdapter.new(integration:).fetch_users
+        phase_progress&.add_total!(users.size)
         counts[:users_fetched] += users.size
         counts[:users_upserted] += upsert_users!(users)
+        phase_progress&.advance!(users.size)
 
         log_info(
           "sync_phase_worker_integration_complete phase=tautulli_users integration_id=#{integration.id} " \
@@ -33,7 +36,7 @@ module Sync
 
     private
 
-    attr_reader :correlation_id, :sync_run
+    attr_reader :correlation_id, :phase_progress, :sync_run
 
     def upsert_users!(users)
       return 0 if users.empty?

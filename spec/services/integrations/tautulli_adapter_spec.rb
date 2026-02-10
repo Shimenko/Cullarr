@@ -58,6 +58,7 @@ RSpec.describe Integrations::TautulliAdapter, type: :service do
     expect(users.first).to include(tautulli_user_id: 10, friendly_name: "Alice", is_hidden: false)
     expect(users.last).to include(tautulli_user_id: 11, is_hidden: true)
     expect(page[:rows].size).to eq(2)
+    expect(page[:records_total]).to eq(2)
     expect(page[:rows].first).to include(history_id: 1001, media_type: "movie", plex_rating_key: "plex-movie-701")
     expect(metadata).to include(duration_ms: 7_260_000, plex_guid: "plex://movie/701")
     stubs.verify_stubbed_calls

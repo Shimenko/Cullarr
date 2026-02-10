@@ -1,8 +1,9 @@
 module Sync
   class RadarrInventorySync
-    def initialize(sync_run:, correlation_id:)
+    def initialize(sync_run:, correlation_id:, phase_progress: nil)
       @sync_run = sync_run
       @correlation_id = correlation_id
+      @phase_progress = phase_progress
     end
 
     def call
@@ -24,16 +25,19 @@ module Sync
 
         movies = adapter.fetch_movies
         movie_files = extract_movie_files(adapter: adapter, movie_rows: movies)
+        phase_progress&.add_total!(movies.size + movie_files.size)
 
         counts[:movies_fetched] += movies.size
         counts[:media_files_fetched] += movie_files.size
         counts[:movies_upserted] += upsert_movies!(integration:, rows: movies)
+        phase_progress&.advance!(movies.size)
         counts[:media_files_upserted] += upsert_movie_files!(
           integration: integration,
           movie_rows: movies,
           file_rows: movie_files,
           mapper: mapper
         )
+        phase_progress&.advance!(movie_files.size)
 
         log_info(
           "sync_phase_worker_integration_complete phase=radarr_inventory integration_id=#{integration.id} " \
@@ -47,7 +51,7 @@ module Sync
 
     private
 
-    attr_reader :correlation_id, :sync_run
+    attr_reader :correlation_id, :phase_progress, :sync_run
 
     def upsert_movies!(integration:, rows:)
       return 0 if rows.empty?

@@ -48,6 +48,7 @@ module Integrations
 
       {
         rows: rows,
+        records_total: records_total.to_i,
         has_more: has_more,
         next_start: next_start
       }

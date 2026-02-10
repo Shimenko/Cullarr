@@ -23,7 +23,8 @@ export default class extends Controller {
         ? `${payload.progress.completedPhases}/${payload.progress.totalPhases} phases`
         : "progress unavailable"
       const percent = Number(payload.progress?.percentComplete || 0).toFixed(1)
-      this.syncStatusTarget.textContent = `Live sync update: run #${payload.id} is ${payload.status} at ${percent}% (${phaseSummary}, ${phaseLabel}).`
+      const phasePercent = Number(payload.progress?.currentPhasePercent || 0).toFixed(1)
+      this.syncStatusTarget.textContent = `Live sync update: run #${payload.id} is ${payload.status} at ${percent}% overall (${phaseSummary}, ${phaseLabel} ${phasePercent}%).`
       return
     }
 

@@ -8,9 +8,10 @@ module Sync
     HISTORY_OVERLAP_ROWS = 100
     RECENT_HISTORY_MEMORY = 1000
 
-    def initialize(sync_run:, correlation_id:)
+    def initialize(sync_run:, correlation_id:, phase_progress: nil)
       @sync_run = sync_run
       @correlation_id = correlation_id
+      @phase_progress = phase_progress
     end
 
     def call
@@ -36,6 +37,7 @@ module Sync
         counts[:rows_skipped] += rows[:skipped] + upsert_result[:rows_skipped]
         counts[:rows_ambiguous] += upsert_result[:rows_ambiguous]
         counts[:watch_stats_upserted] += upsert_result[:watch_stats_upserted]
+        phase_progress&.advance!(rows[:process].size + rows[:skipped])
 
         persist_history_state!(integration:, state:)
 
@@ -53,7 +55,7 @@ module Sync
 
     private
 
-    attr_reader :correlation_id, :sync_run
+    attr_reader :correlation_id, :phase_progress, :sync_run
 
     def incremental_history_rows(adapter:, integration:)
       sync_state = history_sync_state(integration)
@@ -74,6 +76,8 @@ module Sync
         )
         page_rows = page.fetch(:rows)
         break if page_rows.empty?
+        phase_progress&.add_total!(page_rows.size * 2)
+        phase_progress&.advance!(page_rows.size)
 
         fetched_rows += page_rows.size
         page_rows.each do |row|

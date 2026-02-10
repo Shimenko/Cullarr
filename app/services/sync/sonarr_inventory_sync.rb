@@ -1,8 +1,9 @@
 module Sync
   class SonarrInventorySync
-    def initialize(sync_run:, correlation_id:)
+    def initialize(sync_run:, correlation_id:, phase_progress: nil)
       @sync_run = sync_run
       @correlation_id = correlation_id
+      @phase_progress = phase_progress
     end
 
     def call
@@ -25,16 +26,20 @@ module Sync
         mapper = CanonicalPathMapper.new(integration:)
 
         series_rows = adapter.fetch_series
+        phase_progress&.add_total!(series_rows.size)
         counts[:series_fetched] += series_rows.size
         upserted_series = upsert_series!(integration:, rows: series_rows)
         counts[:series_upserted] += upserted_series
+        phase_progress&.advance!(series_rows.size)
 
         series_rows.each do |series_row|
           episode_rows = adapter.fetch_episodes(series_id: series_row[:sonarr_series_id])
           file_rows = adapter.fetch_episode_files(series_id: series_row[:sonarr_series_id])
+          total_child_rows = episode_rows.size + file_rows.size
 
           counts[:episodes_fetched] += episode_rows.size
           counts[:media_files_fetched] += file_rows.size
+          phase_progress&.add_total!(total_child_rows)
 
           upserted_episodes, upserted_files = upsert_series_children!(
             integration: integration,
@@ -45,6 +50,7 @@ module Sync
           )
           counts[:episodes_upserted] += upserted_episodes
           counts[:media_files_upserted] += upserted_files
+          phase_progress&.advance!(total_child_rows)
         end
 
         log_info(
@@ -60,7 +66,7 @@ module Sync
 
     private
 
-    attr_reader :correlation_id, :sync_run
+    attr_reader :correlation_id, :phase_progress, :sync_run
 
     def upsert_series!(integration:, rows:)
       return 0 if rows.empty?

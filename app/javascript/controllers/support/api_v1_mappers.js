@@ -73,7 +73,8 @@ export function mapSyncRunStreamEvent(payload) {
     progress: {
       percentComplete: Number(progress.percent_complete || 0),
       completedPhases: Number(progress.completed_phases || 0),
-      totalPhases: Number(progress.total_phases || 0)
+      totalPhases: Number(progress.total_phases || 0),
+      currentPhasePercent: Number(progress.current_phase_percent || 0)
     },
     queuedNext: Boolean(event.queued_next),
     errorCode: event.error_code || null,

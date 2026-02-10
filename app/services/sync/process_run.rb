@@ -52,7 +52,7 @@ module Sync
       sync_run.update!(
         status: "success",
         phase: "complete",
-        phase_counts_json: phase_counts,
+        phase_counts_json: sync_run.phase_counts_json.merge(phase_counts),
         finished_at: Time.current
       )
       RunProgressBroadcaster.broadcast(sync_run: sync_run, correlation_id: correlation_id)
@@ -111,7 +111,7 @@ module Sync
         {
           sync_run_id: sync_run.id,
           trigger: sync_run.trigger,
-          phase_counts: sync_run.phase_counts_json
+          phase_counts: sync_run.public_phase_counts
         }
       )
     end

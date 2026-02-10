@@ -2,9 +2,10 @@ module Sync
   class TautulliMetadataSync
     WATCHABLE_BATCH_LIMIT = 500
 
-    def initialize(sync_run:, correlation_id:)
+    def initialize(sync_run:, correlation_id:, phase_progress: nil)
       @sync_run = sync_run
       @correlation_id = correlation_id
+      @phase_progress = phase_progress
     end
 
     def call
@@ -21,17 +22,22 @@ module Sync
         counts[:integrations] += 1
 
         adapter = Integrations::TautulliAdapter.new(integration:)
-        watchables_needing_metadata.each do |watchable|
+        watchables = watchables_needing_metadata
+        phase_progress&.add_total!(watchables.size)
+
+        watchables.each do |watchable|
           counts[:metadata_requested] += 1
 
           begin
             metadata = adapter.fetch_metadata(rating_key: watchable.plex_rating_key)
           rescue Integrations::ContractMismatchError
             counts[:metadata_skipped] += 1
+            phase_progress&.advance!(1)
             next
           end
 
           counts[:watchables_updated] += 1 if apply_metadata!(watchable, metadata)
+          phase_progress&.advance!(1)
         end
 
         log_info(
@@ -47,7 +53,7 @@ module Sync
 
     private
 
-    attr_reader :correlation_id, :sync_run
+    attr_reader :correlation_id, :phase_progress, :sync_run
 
     def watchables_needing_metadata
       movie_scope = Movie.where.not(plex_rating_key: [ nil, "" ])

@@ -52,12 +52,14 @@ module Sync
 
     def run_phase!(phase_name:, service_class:)
       phase_started_at = Time.current
+      phase_progress = Sync::ProgressTracker.new(sync_run:, correlation_id:, phase_name:)
       sync_run.update!(phase: phase_name.to_s)
+      phase_progress.start!
       record_phase_started!(phase_name:)
       log_phase_started!(phase_name:)
-      RunProgressBroadcaster.broadcast(sync_run: sync_run, correlation_id: correlation_id)
 
-      phase_counts = service_class.new(sync_run:, correlation_id: correlation_id).call
+      phase_counts = service_class.new(sync_run:, correlation_id: correlation_id, phase_progress: phase_progress).call
+      phase_progress.complete!
 
       sync_run.update!(
         phase_counts_json: sync_run.phase_counts_json.merge(phase_name.to_s => phase_counts)
@@ -66,6 +68,9 @@ module Sync
       log_phase_completed!(phase_name:, phase_counts:, phase_started_at:)
       RunProgressBroadcaster.broadcast(sync_run: sync_run, correlation_id: correlation_id)
       phase_counts
+    rescue StandardError
+      phase_progress&.fail!
+      raise
     end
 
     def record_phase_started!(phase_name:)
