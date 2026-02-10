@@ -41,10 +41,19 @@ Rails.application.routes.draw do
         resources :path_exclusions, only: %i[index create update destroy]
         resources :keep_markers, only: %i[index create destroy]
         resources :sync_runs, path: "sync-runs", only: %i[index show create]
+        resources :deletion_runs, path: "deletion-runs", only: %i[show create] do
+          collection do
+            post :plan
+          end
+          member do
+            post :cancel
+          end
+        end
         resources :candidates, only: :index
         resources :saved_views, path: "saved-views", only: %i[index create update]
         resource :operator_password, only: %i[update]
         post "security/re-auth", to: "security/re_auth#create"
+        post "delete-mode/unlock", to: "delete_mode/unlocks#create"
       end
     end
   end
