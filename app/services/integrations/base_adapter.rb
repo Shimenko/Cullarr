@@ -45,16 +45,24 @@ module Integrations
 
         JSON.parse(response.body)
       when 401, 403
-        raise AuthError.new("integration authentication failed")
+        raise AuthError.new("integration authentication failed", details: error_details(response))
       when 429
         raise RateLimitedError.new(
           "integration is rate-limited",
-          details: { retry_after: response.headers["Retry-After"] }
+          details: error_details(response).merge(retry_after: response.headers["Retry-After"])
         )
       when 500..599
-        raise ConnectivityError.new("integration service unavailable")
+        raise ConnectivityError.new("integration service unavailable", details: error_details(response))
+      when 400..499
+        raise ContractMismatchError.new(
+          "integration returned unexpected status #{response.status}",
+          details: error_details(response)
+        )
       else
-        raise ConnectivityError.new("integration returned unexpected status #{response.status}")
+        raise ConnectivityError.new(
+          "integration returned unexpected status #{response.status}",
+          details: error_details(response)
+        )
       end
     rescue JSON::ParserError, TypeError
       raise ContractMismatchError.new("integration returned malformed JSON")
@@ -113,6 +121,13 @@ module Integrations
       jitter = rand * 0.05
       sleep_seconds = [ base_sleep + jitter, minimum_sleep_seconds.to_f ].max
       sleep(sleep_seconds) unless Rails.env.test?
+    end
+
+    def error_details(response)
+      {
+        status: response.status.to_i,
+        body: response.body.to_s.truncate(500)
+      }
     end
   end
 end

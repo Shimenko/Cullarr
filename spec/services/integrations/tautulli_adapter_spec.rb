@@ -1,6 +1,6 @@
 require "rails_helper"
 
-# rubocop:disable RSpec/ExampleLength
+# rubocop:disable RSpec/ExampleLength, RSpec/MultipleExpectations
 RSpec.describe Integrations::TautulliAdapter, type: :service do
   let(:integration) do
     Integration.create!(
@@ -14,7 +14,9 @@ RSpec.describe Integrations::TautulliAdapter, type: :service do
 
   it "returns healthy check payload for supported versions" do
     stubs = Faraday::Adapter::Test::Stubs.new do |stub|
-      stub.get("api/v2") do
+      stub.get("api/v2") do |env|
+        expect(env.params["apikey"]).to eq("secret")
+        expect(env.params["cmd"]).to eq("get_tautulli_info")
         [ 200, {}, fixture_json("tautulli/get_tautulli_info.json") ]
       end
     end
@@ -29,12 +31,18 @@ RSpec.describe Integrations::TautulliAdapter, type: :service do
   it "normalizes users, history rows, and metadata payloads" do
     stubs = Faraday::Adapter::Test::Stubs.new do |stub|
       stub.get("api/v2") do |env|
+        expect(env.params["apikey"]).to eq("secret")
         case env.params["cmd"]
         when "get_users"
           [ 200, {}, fixture_json("tautulli/get_users.json") ]
         when "get_history"
+          expect(env.params["start"]).to eq("0")
+          expect(env.params["length"]).to eq("50")
+          expect(env.params["order_column"]).to eq("id")
+          expect(env.params["order_dir"]).to eq("desc")
           [ 200, {}, fixture_json("tautulli/get_history_page.json") ]
         when "get_metadata"
+          expect(env.params["rating_key"]).to eq("plex-movie-701")
           [ 200, {}, fixture_json("tautulli/get_metadata.json") ]
         else
           [ 500, {}, "{}" ]
@@ -76,6 +84,47 @@ RSpec.describe Integrations::TautulliAdapter, type: :service do
     end.to raise_error(Integrations::ContractMismatchError)
   end
 
+  it "maps malformed JSON payloads to ContractMismatchError" do
+    stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+      stub.get("api/v2") { [ 200, {}, "{bad-json}" ] }
+    end
+    adapter = described_class.new(integration:, connection: test_connection(stubs))
+
+    expect { adapter.fetch_users }.to raise_error(Integrations::ContractMismatchError, "integration returned malformed JSON")
+  end
+
+  it "maps unexpected client errors to ContractMismatchError with status details" do
+    stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+      stub.get("api/v2") { [ 400, {}, '{"response":{"result":"error","message":"bad"}}' ] }
+    end
+    adapter = described_class.new(integration:, connection: test_connection(stubs))
+
+    expect do
+      adapter.fetch_users
+    end.to raise_error(Integrations::ContractMismatchError) do |error|
+      expect(error.details[:status]).to eq(400)
+    end
+  end
+
+  it "maps authentication failures to AuthError" do
+    stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+      stub.get("api/v2") { [ 401, {}, "{}" ] }
+    end
+    adapter = described_class.new(integration:, connection: test_connection(stubs))
+
+    expect { adapter.fetch_users }.to raise_error(Integrations::AuthError)
+  end
+
+  it "maps rate-limited responses to RateLimitedError" do
+    integration.update!(settings_json: integration.settings_json.merge("retry_max_attempts" => 1))
+    stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+      stub.get("api/v2") { [ 429, { "Retry-After" => "1" }, "{}" ] }
+    end
+    adapter = described_class.new(integration:, connection: test_connection(stubs))
+
+    expect { adapter.fetch_users }.to raise_error(Integrations::RateLimitedError)
+  end
+
   def test_connection(stubs)
     Faraday.new(url: integration.base_url) do |builder|
       builder.adapter :test, stubs
@@ -86,4 +135,4 @@ RSpec.describe Integrations::TautulliAdapter, type: :service do
     Rails.root.join("spec/fixtures/integrations/#{path}").read
   end
 end
-# rubocop:enable RSpec/ExampleLength
+# rubocop:enable RSpec/ExampleLength, RSpec/MultipleExpectations

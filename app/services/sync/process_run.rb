@@ -8,14 +8,18 @@ module Sync
     def call
       return sync_run unless transition_to_running!
 
+      run_started_at = Time.current
+      log_run_started!
       record_run_started_event
       phase_counts = RunSync.new(sync_run:, correlation_id: correlation_id).call
       transition_to_success!(phase_counts:)
+      log_run_succeeded!(run_started_at:, phase_counts:)
       record_run_succeeded_event
       enqueue_coalesced_run_if_needed
       sync_run
     rescue StandardError => error
       transition_to_failed!(error)
+      log_run_failed!(error)
       record_run_failed_event(error)
       enqueue_coalesced_run_if_needed
       sync_run
@@ -85,6 +89,7 @@ module Sync
       end
 
       Sync::ProcessRunJob.perform_later(next_run.id, correlation_id) if next_run.present?
+      log_coalesced_run_enqueued!(next_run) if next_run.present?
     end
 
     def queued_next_trigger_for(sync_run_record)
@@ -160,6 +165,58 @@ module Sync
       else
         "sync_phase_failed"
       end
+    end
+
+    def log_run_started!
+      Rails.logger.info(
+        [
+          "sync_run_started",
+          "sync_run_id=#{sync_run.id}",
+          "trigger=#{sync_run.trigger}",
+          "status=#{sync_run.status}",
+          "correlation_id=#{correlation_id}"
+        ].join(" ")
+      )
+    end
+
+    def log_run_succeeded!(run_started_at:, phase_counts:)
+      duration_ms = ((Time.current - run_started_at) * 1000).round
+      Rails.logger.info(
+        [
+          "sync_run_succeeded",
+          "sync_run_id=#{sync_run.id}",
+          "trigger=#{sync_run.trigger}",
+          "duration_ms=#{duration_ms}",
+          "phase_counts=#{phase_counts.to_json}",
+          "correlation_id=#{correlation_id}"
+        ].join(" ")
+      )
+    end
+
+    def log_run_failed!(error)
+      Rails.logger.error(
+        [
+          "sync_run_failed",
+          "sync_run_id=#{sync_run.id}",
+          "trigger=#{sync_run.trigger}",
+          "error_class=#{error.class}",
+          "error_code=#{error_code_for(error)}",
+          "error_message=#{error.message}",
+          "correlation_id=#{correlation_id}"
+        ].join(" ")
+      )
+    end
+
+    def log_coalesced_run_enqueued!(next_run)
+      Rails.logger.info(
+        [
+          "sync_run_coalesced_enqueue",
+          "from_sync_run_id=#{sync_run.id}",
+          "next_sync_run_id=#{next_run.id}",
+          "trigger=#{next_run.trigger}",
+          "correlation_id=#{correlation_id}"
+        ].join(" ")
+      )
     end
   end
 end

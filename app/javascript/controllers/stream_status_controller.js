@@ -18,8 +18,12 @@ export default class extends Controller {
     const eventName = String(payload.event || "")
 
     if (eventName === "sync_run.updated" && this.hasSyncStatusTarget) {
-      const phaseText = payload.phase ? ` (${payload.phase})` : ""
-      this.syncStatusTarget.textContent = `Live sync update: run #${payload.id} is ${payload.status}${phaseText}.`
+      const phaseLabel = payload.phaseLabel || payload.phase || "starting"
+      const phaseSummary = payload.progress?.totalPhases
+        ? `${payload.progress.completedPhases}/${payload.progress.totalPhases} phases`
+        : "progress unavailable"
+      const percent = Number(payload.progress?.percentComplete || 0).toFixed(1)
+      this.syncStatusTarget.textContent = `Live sync update: run #${payload.id} is ${payload.status} at ${percent}% (${phaseSummary}, ${phaseLabel}).`
       return
     }
 

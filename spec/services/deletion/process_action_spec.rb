@@ -100,7 +100,7 @@ RSpec.describe Deletion::ProcessAction, type: :service do
       allow(adapter).to receive(:unmonitor_movie!).and_return(updated: true)
       allow(adapter).to receive(:ensure_tag!).and_return(arr_tag_id: 44)
       allow(adapter).to receive(:add_movie_tag!).and_return(updated: true)
-      allow(adapter).to receive(:fetch_movie_files).and_return([])
+      allow(adapter).to receive(:fetch_movie_files).with(movie_id: media_file.attachable.radarr_movie_id).and_return([])
 
       described_class.new(deletion_action: action, correlation_id: "corr-process-action-success").call
 
@@ -108,7 +108,7 @@ RSpec.describe Deletion::ProcessAction, type: :service do
       expect(adapter).to have_received(:unmonitor_movie!).with(radarr_movie_id: media_file.attachable.radarr_movie_id).ordered
       expect(adapter).to have_received(:ensure_tag!).with(name: "cullarr:culled").ordered
       expect(adapter).to have_received(:add_movie_tag!).with(radarr_movie_id: media_file.attachable.radarr_movie_id, arr_tag_id: 44).ordered
-      expect(adapter).to have_received(:fetch_movie_files).ordered
+      expect(adapter).to have_received(:fetch_movie_files).with(movie_id: media_file.attachable.radarr_movie_id).ordered
       expect(action.reload.status).to eq("confirmed")
       expect(action.error_code).to be_nil
       expect(action.warning_codes).to eq([])
@@ -168,7 +168,7 @@ RSpec.describe Deletion::ProcessAction, type: :service do
       adapter = instance_spy(Integrations::RadarrAdapter)
       allow(Integrations::AdapterFactory).to receive(:for).with(integration: integration).and_return(adapter)
       allow(adapter).to receive(:delete_movie_file!).and_return(deleted: true)
-      allow(adapter).to receive(:fetch_movie_files).and_return([])
+      allow(adapter).to receive(:fetch_movie_files).with(movie_id: media_file.attachable.radarr_movie_id).and_return([])
       allow(adapter).to receive(:ensure_tag!).and_raise(Integrations::ConnectivityError.new("integration unreachable"))
 
       described_class.new(deletion_action: action, correlation_id: "corr-process-action-tag-warning").call

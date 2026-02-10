@@ -61,13 +61,22 @@ export function mapDeletionRunCreateResponse(payload) {
 
 export function mapSyncRunStreamEvent(payload) {
   const event = ensureObject(payload)
+  const progress = ensureObject(event.progress)
 
   return {
     event: String(event.event || ""),
     id: Number(event.id || 0),
     status: String(event.status || ""),
+    trigger: String(event.trigger || ""),
     phase: event.phase || null,
+    phaseLabel: event.phase_label || null,
+    progress: {
+      percentComplete: Number(progress.percent_complete || 0),
+      completedPhases: Number(progress.completed_phases || 0),
+      totalPhases: Number(progress.total_phases || 0)
+    },
     queuedNext: Boolean(event.queued_next),
+    errorCode: event.error_code || null,
     correlationId: event.correlation_id || null
   }
 }

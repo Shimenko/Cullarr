@@ -91,8 +91,8 @@ module Integrations
         headers: { "X-Api-Key" => integration.api_key }
       )
       { deleted: true }
-    rescue ConnectivityError => error
-      return { deleted: true, already_deleted: true } if error.message.include?("404")
+    rescue ConnectivityError, ContractMismatchError => error
+      return { deleted: true, already_deleted: true } if not_found_error?(error)
 
       raise
     end
@@ -156,6 +156,10 @@ module Integrations
     def duration_ms_for(episode)
       runtime = episode["runtime"]
       runtime.present? ? runtime.to_i * 60_000 : nil
+    end
+
+    def not_found_error?(error)
+      error.details[:status].to_i == 404 || error.message.include?("404")
     end
   end
 end

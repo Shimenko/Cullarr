@@ -25,19 +25,49 @@ RSpec.describe Integrations::RadarrAdapter, type: :service do
     stubs.verify_stubbed_calls
   end
 
+  # rubocop:disable RSpec/ExampleLength
   it "normalizes movie and movie-file payloads" do
     stubs = Faraday::Adapter::Test::Stubs.new do |stub|
-      stub.get("api/v3/movie") { [ 200, {}, fixture_json("radarr/movies.json") ] }
-      stub.get("api/v3/moviefile") { [ 200, {}, fixture_json("radarr/movie_files.json") ] }
+      stub.get("api/v3/movie") do |env|
+        expect(env.params["includeMovieFile"]).to eq("true")
+        [ 200, {}, fixture_json("radarr/movies.json") ]
+      end
+      stub.get("api/v3/moviefile") do |env|
+        expect(env.params["movieId"]).to eq("701")
+        [ 200, {}, fixture_json("radarr/movie_files.json") ]
+      end
     end
     adapter = described_class.new(integration:, connection: test_connection(stubs))
 
     movies = adapter.fetch_movies
-    files = adapter.fetch_movie_files
+    files = adapter.fetch_movie_files(movie_id: 701)
 
     expect(movies.first).to include(radarr_movie_id: 701, title: "Example Movie", duration_ms: 7_260_000)
     expect(files.first).to include(arr_file_id: 8001, radarr_movie_id: 701, size_bytes: 3_221_225_472)
     stubs.verify_stubbed_calls
+  end
+  # rubocop:enable RSpec/ExampleLength
+
+  it "maps unexpected client errors to ContractMismatchError with status details" do
+    stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+      stub.get("api/v3/moviefile") { [ 400, {}, '{"message":"movieId required"}' ] }
+    end
+    adapter = described_class.new(integration:, connection: test_connection(stubs))
+
+    expect do
+      adapter.fetch_movie_files(movie_id: 701)
+    end.to raise_error(Integrations::ContractMismatchError) do |error|
+      expect(error.details[:status]).to eq(400)
+    end
+  end
+
+  it "maps service unavailable responses to ConnectivityError" do
+    stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+      stub.get("api/v3/movie") { [ 503, {}, '{"message":"service unavailable"}' ] }
+    end
+    adapter = described_class.new(integration:, connection: test_connection(stubs))
+
+    expect { adapter.fetch_movies }.to raise_error(Integrations::ConnectivityError)
   end
 
   it "treats already-missing movie files as deleted for idempotency" do

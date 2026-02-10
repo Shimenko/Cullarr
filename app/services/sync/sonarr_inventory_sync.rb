@@ -16,6 +16,7 @@ module Sync
         media_files_upserted: 0
       }
 
+      log_info("sync_phase_worker_started phase=sonarr_inventory")
       Integration.sonarr.find_each do |integration|
         Integrations::HealthCheck.new(integration, raise_on_unsupported: true).call
         counts[:integrations] += 1
@@ -45,8 +46,15 @@ module Sync
           counts[:episodes_upserted] += upserted_episodes
           counts[:media_files_upserted] += upserted_files
         end
+
+        log_info(
+          "sync_phase_worker_integration_complete phase=sonarr_inventory integration_id=#{integration.id} " \
+          "series_fetched=#{counts[:series_fetched]} episodes_fetched=#{counts[:episodes_fetched]} " \
+          "media_files_fetched=#{counts[:media_files_fetched]}"
+        )
       end
 
+      log_info("sync_phase_worker_completed phase=sonarr_inventory counts=#{counts.to_json}")
       counts
     end
 
@@ -165,6 +173,16 @@ module Sync
 
       MediaFile.upsert_all(payload, unique_by: %i[integration_id arr_file_id])
       payload.size
+    end
+
+    def log_info(message)
+      Rails.logger.info(
+        [
+          message,
+          "sync_run_id=#{sync_run.id}",
+          "correlation_id=#{correlation_id}"
+        ].join(" ")
+      )
     end
   end
 end

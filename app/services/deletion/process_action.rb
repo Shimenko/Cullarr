@@ -318,7 +318,12 @@ module Deletion
 
       case media_file.attachable
       when Movie
-        adapter.fetch_movie_files.any? { |file| file.fetch(:arr_file_id).to_i == media_file.arr_file_id }
+        movie_id = media_file.attachable.radarr_movie_id
+        return true if movie_id.blank?
+
+        adapter.fetch_movie_files(movie_id: movie_id).any? do |file|
+          file.fetch(:arr_file_id).to_i == media_file.arr_file_id
+        end
       when Episode
         series_id = media_file.attachable.season&.series&.sonarr_series_id
         return true if series_id.blank?

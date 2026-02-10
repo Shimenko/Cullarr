@@ -14,6 +14,7 @@ module Sync
         media_files_upserted: 0
       }
 
+      log_info("sync_phase_worker_started phase=radarr_inventory")
       Integration.radarr.find_each do |integration|
         Integrations::HealthCheck.new(integration, raise_on_unsupported: true).call
         counts[:integrations] += 1
@@ -22,7 +23,7 @@ module Sync
         mapper = CanonicalPathMapper.new(integration:)
 
         movies = adapter.fetch_movies
-        movie_files = adapter.fetch_movie_files
+        movie_files = extract_movie_files(adapter: adapter, movie_rows: movies)
 
         counts[:movies_fetched] += movies.size
         counts[:media_files_fetched] += movie_files.size
@@ -33,8 +34,14 @@ module Sync
           file_rows: movie_files,
           mapper: mapper
         )
+
+        log_info(
+          "sync_phase_worker_integration_complete phase=radarr_inventory integration_id=#{integration.id} " \
+          "movies_fetched=#{counts[:movies_fetched]} media_files_fetched=#{counts[:media_files_fetched]}"
+        )
       end
 
+      log_info("sync_phase_worker_completed phase=radarr_inventory counts=#{counts.to_json}")
       counts
     end
 
@@ -97,6 +104,32 @@ module Sync
 
       MediaFile.upsert_all(payload, unique_by: %i[integration_id arr_file_id])
       payload.size
+    end
+
+    def extract_movie_files(adapter:, movie_rows:)
+      from_movies = movie_rows.filter_map { |row| row[:movie_file] }
+      fallback_movie_ids = movie_rows.filter_map do |row|
+        next if row[:movie_file].present?
+        next unless row[:has_file] || row[:movie_file_id].present?
+
+        row.fetch(:radarr_movie_id)
+      end
+
+      fallback_rows = fallback_movie_ids.flat_map do |movie_id|
+        adapter.fetch_movie_files(movie_id: movie_id)
+      end
+
+      from_movies + fallback_rows
+    end
+
+    def log_info(message)
+      Rails.logger.info(
+        [
+          message,
+          "sync_run_id=#{sync_run.id}",
+          "correlation_id=#{correlation_id}"
+        ].join(" ")
+      )
     end
   end
 end

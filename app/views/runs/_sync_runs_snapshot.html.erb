@@ -1,68 +1,106 @@
 <%= render Ui::PanelComponent.new(title: "Sync Runs", subtitle: "Current and recent synchronization activity") do %>
-  <div class="ui-stack-sm">
+  <div class="flex flex-wrap items-center gap-3">
     <%= button_to "Sync now", runs_sync_now_path, method: :post, class: "ui-button ui-button-primary" %>
+    <%= render Ui::BadgeComponent.new(label: sync_enabled ? "Scheduler enabled" : "Scheduler disabled", kind: sync_enabled ? :success : :warning) %>
+    <% if sync_enabled %>
+      <%= render Ui::ChipComponent.new(label: "Every #{sync_interval_minutes} minute(s)", kind: :neutral) %>
+    <% end %>
   </div>
 
-  <div class="mt-3 space-y-1">
-    <p class="ui-copy">
-      Scheduled sync:
-      <strong><%= sync_enabled ? "enabled" : "disabled" %></strong>
-      <% if sync_enabled %>
-        every <%= sync_interval_minutes %> minute(s)
-      <% end %>
-    </p>
-    <p class="ui-copy">
-      Last successful sync:
-      <%= last_successful_sync&.finished_at&.strftime("%Y-%m-%d %H:%M:%S") || "none yet" %>
-    </p>
-    <p class="ui-copy">
-      Next scheduled sync:
-      <%= next_scheduled_sync_at&.strftime("%Y-%m-%d %H:%M:%S") || "n/a" %>
-    </p>
+  <div class="ui-runs-summary mt-3">
+    <div class="ui-runs-summary-item">
+      <p class="ui-copy">Last successful sync</p>
+      <p class="ui-heading-sm"><%= sync_run_timestamp(last_successful_sync&.finished_at) %></p>
+    </div>
+    <div class="ui-runs-summary-item">
+      <p class="ui-copy">Next scheduled sync</p>
+      <p class="ui-heading-sm"><%= sync_run_timestamp(next_scheduled_sync_at) %></p>
+    </div>
   </div>
 
   <% if running_sync_run.present? %>
-    <p class="ui-copy">
-      Active run <code>#<%= running_sync_run.id %></code>:
-      <strong><%= running_sync_run.phase.presence || "starting" %></strong>
-      (<%= running_sync_run.trigger %>)
-    </p>
-    <% if running_sync_run.queued_next? %>
-      <p class="ui-copy">
-        <%= render Ui::ChipComponent.new(label: "Sync queued next", kind: :warning) %>
-      </p>
-    <% end %>
+    <% running_progress = running_sync_run.progress_snapshot %>
+    <section class="ui-run-active mt-4" aria-label="Active sync run">
+      <div class="ui-run-active-head">
+        <div>
+          <p class="ui-copy">
+            Active run <code>#<%= running_sync_run.id %></code> (<%= running_sync_run.trigger %>)
+          </p>
+          <p class="ui-heading-sm"><%= sync_run_phase_label(running_sync_run.phase) %></p>
+        </div>
+        <div class="flex flex-wrap items-center justify-end gap-2">
+          <%= render Ui::BadgeComponent.new(label: running_sync_run.status, kind: sync_run_status_badge_kind(running_sync_run)) %>
+          <% if running_sync_run.queued_next? %>
+            <%= render Ui::ChipComponent.new(label: "Sync queued next", kind: :warning) %>
+          <% end %>
+        </div>
+      </div>
+
+      <%= render Ui::ProgressComponent.new(
+        value: running_progress[:percent_complete],
+        max: 100,
+        label: "Overall run progress",
+        caption: sync_run_progress_caption(running_sync_run),
+        animated: true,
+        variant: sync_run_progress_variant(running_sync_run)
+      ) %>
+
+      <ol class="ui-run-phase-list">
+        <% running_progress[:phase_states].each do |phase_state| %>
+          <li class="ui-run-phase-item ui-run-phase-item-<%= phase_state[:state] %>">
+            <span class="ui-run-phase-item-label"><%= sync_run_phase_label(phase_state[:phase]) %></span>
+            <span class="ui-run-phase-item-state"><%= phase_state[:state] %></span>
+          </li>
+        <% end %>
+      </ol>
+    </section>
   <% else %>
-    <p class="ui-copy">No sync run is currently active.</p>
+    <p class="ui-copy mt-4">No sync run is currently active.</p>
   <% end %>
 
-  <table class="ui-table" aria-label="Recent sync runs">
-    <thead>
-      <tr>
-        <th scope="col">Run</th>
-        <th scope="col">Status</th>
-        <th scope="col">Trigger</th>
-        <th scope="col">Phase</th>
-        <th scope="col">Started</th>
-        <th scope="col">Finished</th>
-      </tr>
-    </thead>
-    <tbody>
-      <% recent_sync_runs.each do |sync_run| %>
-        <tr id="sync-run-<%= sync_run.id %>">
-          <td><code>#<%= sync_run.id %></code></td>
-          <td><%= sync_run.status %></td>
-          <td><%= sync_run.trigger %></td>
-          <td><%= sync_run.phase.presence || "-" %></td>
-          <td><%= sync_run.started_at&.strftime("%Y-%m-%d %H:%M:%S") || "-" %></td>
-          <td><%= sync_run.finished_at&.strftime("%Y-%m-%d %H:%M:%S") || "-" %></td>
-        </tr>
-      <% end %>
-      <% if recent_sync_runs.empty? %>
+  <div class="ui-table-wrap mt-4">
+    <table class="ui-table" aria-label="Recent sync runs">
+      <thead>
         <tr>
-          <td colspan="6">No sync runs have executed yet.</td>
+          <th scope="col">Run</th>
+          <th scope="col">Status</th>
+          <th scope="col">Trigger</th>
+          <th scope="col">Phase</th>
+          <th scope="col">Progress</th>
+          <th scope="col">Duration</th>
+          <th scope="col">Started</th>
+          <th scope="col">Finished</th>
+          <th scope="col">Error</th>
         </tr>
-      <% end %>
-    </tbody>
-  </table>
+      </thead>
+      <tbody>
+        <% recent_sync_runs.each do |sync_run| %>
+          <% progress = sync_run.progress_snapshot %>
+          <tr id="sync-run-<%= sync_run.id %>">
+            <td class="ui-table-cell-nowrap"><code>#<%= sync_run.id %></code></td>
+            <td class="ui-table-cell-nowrap"><%= render Ui::BadgeComponent.new(label: sync_run.status, kind: sync_run_status_badge_kind(sync_run)) %></td>
+            <td class="ui-table-cell-nowrap"><%= sync_run.trigger %></td>
+            <td class="ui-table-cell-nowrap"><%= sync_run_phase_label(sync_run.phase) %></td>
+            <td class="ui-run-progress-cell">
+              <%= render Ui::ProgressComponent.new(
+                value: progress[:percent_complete],
+                max: 100,
+                caption: "#{progress[:percent_complete]}%",
+                variant: sync_run_progress_variant(sync_run)
+              ) %>
+            </td>
+            <td class="ui-table-cell-nowrap"><%= sync_run_duration_label(sync_run) %></td>
+            <td class="ui-table-cell-nowrap"><%= sync_run_timestamp(sync_run.started_at) %></td>
+            <td class="ui-table-cell-nowrap"><%= sync_run_timestamp(sync_run.finished_at) %></td>
+            <td class="ui-table-cell-nowrap"><%= sync_run.error_code.presence || "-" %></td>
+          </tr>
+        <% end %>
+        <% if recent_sync_runs.empty? %>
+          <tr>
+            <td colspan="9">No sync runs have executed yet.</td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  </div>
 <% end %>

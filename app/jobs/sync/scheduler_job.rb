@@ -2,25 +2,25 @@ class Sync::SchedulerJob < ApplicationJob
   queue_as :default
 
   def perform
-    return unless AppSetting.db_value_for("sync_enabled")
-    return unless sync_due?
+    schedule_window = build_schedule_window
+    return unless schedule_window.due?
 
     Sync::TriggerRun.new(
       trigger: "scheduler",
       correlation_id: SecureRandom.uuid,
       actor: nil
     ).call
+  rescue StandardError => error
+    Rails.logger.warn("sync_scheduler_failed class=#{error.class} message=#{error.message}")
+    raise
   end
 
   private
 
-  def sync_due?
-    interval_minutes = AppSetting.db_value_for("sync_interval_minutes").to_i
-    interval_minutes = 30 if interval_minutes <= 0
-
-    last_successful_sync = SyncRun.where(status: "success").order(finished_at: :desc).first
-    return true if last_successful_sync.blank?
-
-    last_successful_sync.finished_at.blank? || last_successful_sync.finished_at <= interval_minutes.minutes.ago
+  def build_schedule_window
+    Sync::ScheduleWindow.new(
+      sync_enabled: AppSetting.db_value_for("sync_enabled"),
+      sync_interval_minutes: AppSetting.db_value_for("sync_interval_minutes")
+    )
   end
 end

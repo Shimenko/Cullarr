@@ -30,18 +30,16 @@ RSpec.describe Sync::RadarrInventorySync, type: :service do
           plex_rating_key: "plex-movie-701",
           plex_guid: "plex://movie/701",
           duration_ms: 7_260_000,
+          has_file: true,
+          movie_file_id: 8001,
+          movie_file: {
+            arr_file_id: 8001,
+            radarr_movie_id: 701,
+            path: "/data/movies/Example Movie (2024)/movie.mkv",
+            size_bytes: 3_221_225_472,
+            quality: {}
+          },
           metadata: {}
-        }
-      ]
-    )
-    allow(adapter).to receive(:fetch_movie_files).and_return(
-      [
-        {
-          arr_file_id: 8001,
-          radarr_movie_id: 701,
-          path: "/data/movies/Example Movie (2024)/movie.mkv",
-          size_bytes: 3_221_225_472,
-          quality: {}
         }
       ]
     )
@@ -71,12 +69,38 @@ RSpec.describe Sync::RadarrInventorySync, type: :service do
     adapter = instance_double(Integrations::RadarrAdapter)
     allow(Integrations::RadarrAdapter).to receive(:new).with(integration:).and_return(adapter)
     allow(adapter).to receive(:fetch_movies).and_return(
-      [ { radarr_movie_id: 900, title: "First Title", metadata: {} } ],
-      [ { radarr_movie_id: 900, title: "Updated Title", metadata: {} } ]
-    )
-    allow(adapter).to receive(:fetch_movie_files).and_return(
-      [ { arr_file_id: 901, radarr_movie_id: 900, path: "/data/movies/one.mkv", size_bytes: 100, quality: {} } ],
-      [ { arr_file_id: 901, radarr_movie_id: 900, path: "/data/movies/one.mkv", size_bytes: 200, quality: {} } ]
+      [
+        {
+          radarr_movie_id: 900,
+          title: "First Title",
+          has_file: true,
+          movie_file_id: 901,
+          movie_file: {
+            arr_file_id: 901,
+            radarr_movie_id: 900,
+            path: "/data/movies/one.mkv",
+            size_bytes: 100,
+            quality: {}
+          },
+          metadata: {}
+        }
+      ],
+      [
+        {
+          radarr_movie_id: 900,
+          title: "Updated Title",
+          has_file: true,
+          movie_file_id: 901,
+          movie_file: {
+            arr_file_id: 901,
+            radarr_movie_id: 900,
+            path: "/data/movies/one.mkv",
+            size_bytes: 200,
+            quality: {}
+          },
+          metadata: {}
+        }
+      ]
     )
 
     described_class.new(sync_run:, correlation_id: "corr-radarr-first").call
@@ -108,18 +132,16 @@ RSpec.describe Sync::RadarrInventorySync, type: :service do
         {
           radarr_movie_id: 777,
           title: "Root Mapping Movie",
+          has_file: true,
+          movie_file_id: 7771,
+          movie_file: {
+            arr_file_id: 7771,
+            radarr_movie_id: 777,
+            path: "/movies/Root Mapping Movie/movie.mkv",
+            size_bytes: 400,
+            quality: {}
+          },
           metadata: {}
-        }
-      ]
-    )
-    allow(adapter).to receive(:fetch_movie_files).and_return(
-      [
-        {
-          arr_file_id: 7771,
-          radarr_movie_id: 777,
-          path: "/movies/Root Mapping Movie/movie.mkv",
-          size_bytes: 400,
-          quality: {}
         }
       ]
     )
@@ -128,6 +150,50 @@ RSpec.describe Sync::RadarrInventorySync, type: :service do
 
     media_file = MediaFile.find_by!(integration:, arr_file_id: 7771)
     expect(media_file.path_canonical).to eq("/mnt/movies/Root Mapping Movie/movie.mkv")
+  end
+
+  it "falls back to movie-scoped moviefile fetch when embedded movieFile payload is absent" do
+    integration = Integration.create!(
+      kind: "radarr",
+      name: "Radarr MovieFile Fallback",
+      base_url: "https://radarr.fallback.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(integration, raise_on_unsupported: true).and_return(health_check)
+
+    adapter = instance_double(Integrations::RadarrAdapter)
+    allow(Integrations::RadarrAdapter).to receive(:new).with(integration:).and_return(adapter)
+    allow(adapter).to receive(:fetch_movies).and_return(
+      [
+        {
+          radarr_movie_id: 1200,
+          title: "Fallback Movie",
+          has_file: true,
+          movie_file_id: 2200,
+          movie_file: nil,
+          metadata: {}
+        }
+      ]
+    )
+    allow(adapter).to receive(:fetch_movie_files).with(movie_id: 1200).and_return(
+      [
+        {
+          arr_file_id: 2200,
+          radarr_movie_id: 1200,
+          path: "/data/movies/fallback.mkv",
+          size_bytes: 120,
+          quality: {}
+        }
+      ]
+    )
+
+    result = described_class.new(sync_run:, correlation_id: "corr-radarr-fallback").call
+
+    expect(result).to include(media_files_fetched: 1, media_files_upserted: 1)
+    expect(adapter).to have_received(:fetch_movie_files).with(movie_id: 1200)
   end
 end
 # rubocop:enable RSpec/ExampleLength, RSpec/ReceiveMessages

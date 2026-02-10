@@ -33,12 +33,12 @@ RSpec.describe "RunsOperations", type: :system do
 
     visit "/runs"
 
-    expect(page).to have_content("Scheduled sync:")
-    expect(page).to have_content("Next scheduled sync:")
+    expect(page).to have_content("Scheduler enabled")
+    expect(page).to have_content("Next scheduled sync")
     expect(page).to have_css(".ui-chip.ui-chip-warning", text: "Sync queued next")
     expect(page).to have_content("Deletion Runs")
     expect(page).to have_link("##{deletion_run.id}", href: "/deletion-runs/#{deletion_run.id}")
-    expect(page).to have_content(sync_run.phase)
+    expect(page).to have_content("Tautulli History")
   end
 end
 # rubocop:enable RSpec/ExampleLength, RSpec/MultipleExpectations

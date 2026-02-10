@@ -26,22 +26,16 @@ module Sync
       def snapshot_locals
         sync_enabled = ActiveModel::Type::Boolean.new.cast(AppSetting.db_value_for("sync_enabled"))
         sync_interval_minutes = [ AppSetting.db_value_for("sync_interval_minutes").to_i, 1 ].max
-        last_successful_sync = SyncRun.where(status: "success").where.not(finished_at: nil).order(finished_at: :desc).first
+        schedule_window = Sync::ScheduleWindow.new(sync_enabled:, sync_interval_minutes:)
 
         {
           running_sync_run: SyncRun.where(status: "running").recent_first.first,
           recent_sync_runs: SyncRun.recent_first.limit(20),
           sync_enabled: sync_enabled,
           sync_interval_minutes: sync_interval_minutes,
-          last_successful_sync: last_successful_sync,
-          next_scheduled_sync_at: sync_enabled ? next_scheduled_sync_at(last_successful_sync:, sync_interval_minutes:) : nil
+          last_successful_sync: schedule_window.last_successful_sync,
+          next_scheduled_sync_at: schedule_window.next_scheduled_sync_at
         }
-      end
-
-      def next_scheduled_sync_at(last_successful_sync:, sync_interval_minutes:)
-        return Time.current if last_successful_sync.blank?
-
-        last_successful_sync.finished_at + sync_interval_minutes.minutes
       end
 
       def sync_event_payload(sync_run:, correlation_id:)
@@ -52,8 +46,12 @@ module Sync
           event: "sync_run.updated",
           id: run.id,
           status: run.status,
+          trigger: run.trigger,
           phase: run.phase,
+          phase_label: Sync::RunSync.phase_label_for(run.phase.presence || "starting"),
+          progress: run.progress_snapshot,
           queued_next: run.queued_next,
+          error_code: run.error_code,
           correlation_id: correlation_id.presence || SecureRandom.uuid
         }
       end

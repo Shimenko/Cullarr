@@ -13,17 +13,22 @@ module Integrations
       payload = request_json(
         method: :get,
         path: "api/v3/movie",
+        params: { includeMovieFile: true },
         headers: { "X-Api-Key" => integration.api_key }
       )
 
       Array(payload).map do |movie|
+        radarr_movie_id = ensure_present!(movie, :id).to_i
         {
-          radarr_movie_id: ensure_present!(movie, :id).to_i,
+          radarr_movie_id: radarr_movie_id,
           title: ensure_present!(movie, :title).to_s,
           year: movie["year"]&.to_i,
           tmdb_id: movie["tmdbId"]&.to_i,
           imdb_id: movie["imdbId"]&.presence,
           duration_ms: runtime_ms_for(movie),
+          has_file: ActiveModel::Type::Boolean.new.cast(movie["hasFile"]),
+          movie_file_id: movie["movieFileId"]&.to_i,
+          movie_file: normalize_movie_file(movie["movieFile"], radarr_movie_id: radarr_movie_id),
           plex_rating_key: movie["ratings"]&.dig("plex", "ratingKey"),
           plex_guid: movie["ratings"]&.dig("plex", "guid"),
           metadata: {
@@ -34,22 +39,15 @@ module Integrations
       end
     end
 
-    def fetch_movie_files
+    def fetch_movie_files(movie_id:)
       payload = request_json(
         method: :get,
         path: "api/v3/moviefile",
+        params: { movieId: movie_id },
         headers: { "X-Api-Key" => integration.api_key }
       )
 
-      Array(payload).map do |movie_file|
-        {
-          arr_file_id: ensure_present!(movie_file, :id).to_i,
-          radarr_movie_id: ensure_present!(movie_file, :movieId).to_i,
-          path: ensure_present!(movie_file, :path).to_s,
-          size_bytes: ensure_present!(movie_file, :size).to_i,
-          quality: movie_file["quality"] || {}
-        }
-      end
+      Array(payload).map { |movie_file| normalize_movie_file(movie_file) }
     end
 
     def delete_movie_file!(arr_file_id:)
@@ -59,8 +57,8 @@ module Integrations
         headers: { "X-Api-Key" => integration.api_key }
       )
       { deleted: true }
-    rescue ConnectivityError => error
-      return { deleted: true, already_deleted: true } if error.message.include?("404")
+    rescue ConnectivityError, ContractMismatchError => error
+      return { deleted: true, already_deleted: true } if not_found_error?(error)
 
       raise
     end
@@ -119,6 +117,22 @@ module Integrations
     def runtime_ms_for(movie)
       runtime = movie["runtime"]
       runtime.present? ? runtime.to_i * 60_000 : nil
+    end
+
+    def normalize_movie_file(movie_file, radarr_movie_id: nil)
+      return nil if movie_file.blank?
+
+      {
+        arr_file_id: ensure_present!(movie_file, :id).to_i,
+        radarr_movie_id: (radarr_movie_id || ensure_present!(movie_file, :movieId)).to_i,
+        path: ensure_present!(movie_file, :path).to_s,
+        size_bytes: ensure_present!(movie_file, :size).to_i,
+        quality: movie_file["quality"] || {}
+      }
+    end
+
+    def not_found_error?(error)
+      error.details[:status].to_i == 404 || error.message.include?("404")
     end
   end
 end

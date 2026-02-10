@@ -23,6 +23,7 @@ module Sync
         watch_stats_upserted: 0
       }
 
+      log_info("sync_phase_worker_started phase=tautulli_history")
       Integration.tautulli.find_each do |integration|
         Integrations::HealthCheck.new(integration, raise_on_unsupported: true).call
         counts[:integrations] += 1
@@ -37,8 +38,16 @@ module Sync
         counts[:watch_stats_upserted] += upsert_result[:watch_stats_upserted]
 
         persist_history_state!(integration:, state:)
+
+        log_info(
+          "sync_phase_worker_integration_complete phase=tautulli_history integration_id=#{integration.id} " \
+          "rows_fetched=#{counts[:rows_fetched]} rows_processed=#{counts[:rows_processed]} " \
+          "rows_skipped=#{counts[:rows_skipped]} rows_ambiguous=#{counts[:rows_ambiguous]} " \
+          "watch_stats_upserted=#{counts[:watch_stats_upserted]}"
+        )
       end
 
+      log_info("sync_phase_worker_completed phase=tautulli_history counts=#{counts.to_json}")
       counts
     end
 
@@ -264,6 +273,16 @@ module Sync
 
     def persist_history_state!(integration:, state:)
       integration.update!(settings_json: integration.settings_json.merge("history_sync_state" => state))
+    end
+
+    def log_info(message)
+      Rails.logger.info(
+        [
+          message,
+          "sync_run_id=#{sync_run.id}",
+          "correlation_id=#{correlation_id}"
+        ].join(" ")
+      )
     end
   end
 end

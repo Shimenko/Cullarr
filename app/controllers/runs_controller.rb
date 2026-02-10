@@ -1,5 +1,7 @@
 class RunsController < ApplicationController
   def index
+    schedule_window = sync_schedule_window
+
     @running_sync_run = SyncRun.where(status: "running").recent_first.first
     @recent_sync_runs = SyncRun.recent_first.limit(20)
     @running_deletion_run = DeletionRun.where(status: "running").recent_first.first
@@ -7,8 +9,8 @@ class RunsController < ApplicationController
     @deletion_summary_by_run_id = DeletionRun.action_summary_by_run_id(@recent_deletion_runs.map(&:id))
     @sync_enabled = ActiveModel::Type::Boolean.new.cast(AppSetting.db_value_for("sync_enabled"))
     @sync_interval_minutes = [ AppSetting.db_value_for("sync_interval_minutes").to_i, 1 ].max
-    @last_successful_sync = SyncRun.where(status: "success").where.not(finished_at: nil).order(finished_at: :desc).first
-    @next_scheduled_sync_at = next_scheduled_sync_at
+    @last_successful_sync = schedule_window.last_successful_sync
+    @next_scheduled_sync_at = schedule_window.next_scheduled_sync_at
   end
 
   def sync_now
@@ -32,10 +34,10 @@ class RunsController < ApplicationController
 
   private
 
-  def next_scheduled_sync_at
-    return nil unless @sync_enabled
-    return Time.current if @last_successful_sync.blank?
-
-    @last_successful_sync.finished_at + @sync_interval_minutes.minutes
+  def sync_schedule_window
+    Sync::ScheduleWindow.new(
+      sync_enabled: AppSetting.db_value_for("sync_enabled"),
+      sync_interval_minutes: AppSetting.db_value_for("sync_interval_minutes")
+    )
   end
 end

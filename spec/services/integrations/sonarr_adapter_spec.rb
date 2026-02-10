@@ -29,8 +29,12 @@ RSpec.describe Integrations::SonarrAdapter, type: :service do
   it "normalizes series/episodes/file payloads" do
     stubs = Faraday::Adapter::Test::Stubs.new do |stub|
       stub.get("api/v3/series") { [ 200, {}, fixture_json("sonarr/series.json") ] }
-      stub.get("api/v3/episode") { [ 200, {}, fixture_json("sonarr/episodes_101.json") ] }
-      stub.get("api/v3/episodefile") do
+      stub.get("api/v3/episode") do |env|
+        expect(env.params["seriesId"]).to eq("101")
+        [ 200, {}, fixture_json("sonarr/episodes_101.json") ]
+      end
+      stub.get("api/v3/episodefile") do |env|
+        expect(env.params["seriesId"]).to eq("101")
         [ 200, {}, fixture_json("sonarr/episode_files_101.json") ]
       end
     end
@@ -53,6 +57,37 @@ RSpec.describe Integrations::SonarrAdapter, type: :service do
     adapter = described_class.new(integration:, connection: test_connection(stubs))
 
     expect { adapter.check_health! }.to raise_error(Integrations::AuthError)
+  end
+
+  it "maps unexpected client errors to ContractMismatchError with status details" do
+    stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+      stub.get("api/v3/series") { [ 400, {}, '{"message":"bad request"}' ] }
+    end
+    adapter = described_class.new(integration:, connection: test_connection(stubs))
+
+    expect do
+      adapter.fetch_series
+    end.to raise_error(Integrations::ContractMismatchError) do |error|
+      expect(error.details[:status]).to eq(400)
+    end
+  end
+
+  it "maps malformed JSON payloads to ContractMismatchError" do
+    stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+      stub.get("api/v3/series") { [ 200, {}, "{not-json}" ] }
+    end
+    adapter = described_class.new(integration:, connection: test_connection(stubs))
+
+    expect { adapter.fetch_series }.to raise_error(Integrations::ContractMismatchError, "integration returned malformed JSON")
+  end
+
+  it "maps service unavailable responses to ConnectivityError" do
+    stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+      stub.get("api/v3/series") { [ 503, {}, '{"message":"service unavailable"}' ] }
+    end
+    adapter = described_class.new(integration:, connection: test_connection(stubs))
+
+    expect { adapter.fetch_series }.to raise_error(Integrations::ConnectivityError)
   end
 
   it "treats already-missing episode files as deleted for idempotency" do

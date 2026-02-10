@@ -15,6 +15,7 @@ module Sync
         metadata_skipped: 0
       }
 
+      log_info("sync_phase_worker_started phase=tautulli_metadata")
       Integration.tautulli.find_each do |integration|
         Integrations::HealthCheck.new(integration, raise_on_unsupported: true).call
         counts[:integrations] += 1
@@ -32,8 +33,15 @@ module Sync
 
           counts[:watchables_updated] += 1 if apply_metadata!(watchable, metadata)
         end
+
+        log_info(
+          "sync_phase_worker_integration_complete phase=tautulli_metadata integration_id=#{integration.id} " \
+          "metadata_requested=#{counts[:metadata_requested]} watchables_updated=#{counts[:watchables_updated]} " \
+          "metadata_skipped=#{counts[:metadata_skipped]}"
+        )
       end
 
+      log_info("sync_phase_worker_completed phase=tautulli_metadata counts=#{counts.to_json}")
       counts
     end
 
@@ -79,6 +87,16 @@ module Sync
 
       watchable.update!(attrs)
       true
+    end
+
+    def log_info(message)
+      Rails.logger.info(
+        [
+          message,
+          "sync_run_id=#{sync_run.id}",
+          "correlation_id=#{correlation_id}"
+        ].join(" ")
+      )
     end
   end
 end

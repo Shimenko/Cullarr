@@ -32,6 +32,7 @@ module Sync
       if result&.state.in?([ :queued, :queued_next ])
         RunProgressBroadcaster.broadcast(sync_run: result.sync_run, correlation_id: correlation_id)
       end
+      log_result!(result)
       result
     end
 
@@ -75,6 +76,20 @@ module Sync
           queued_next: true,
           trigger: trigger
         }
+      )
+    end
+
+    def log_result!(result)
+      return if result.blank?
+
+      Rails.logger.info(
+        [
+          "sync_run_triggered",
+          "state=#{result.state}",
+          "sync_run_id=#{result.sync_run&.id}",
+          "trigger=#{trigger}",
+          "correlation_id=#{correlation_id}"
+        ].join(" ")
       )
     end
   end
