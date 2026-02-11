@@ -273,6 +273,73 @@ RSpec.describe Sync::SonarrInventorySync, type: :service do
     expect(episode.plex_guid).to eq("plex://episode/4201")
   end
 
+  it "preserves created_at and existing metadata flags for series and episodes" do
+    integration = Integration.create!(
+      kind: "sonarr",
+      name: "Sonarr Preserve CreatedAt",
+      base_url: "https://sonarr.created-at.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: { "sonarr_fetch_workers" => 1 }
+    )
+
+    series = Series.create!(
+      integration: integration,
+      sonarr_series_id: 9_100,
+      title: "CreatedAt Show",
+      metadata_json: { "low_confidence_mapping" => true }
+    )
+    season = Season.create!(series: series, season_number: 1)
+    episode = Episode.create!(
+      integration: integration,
+      season: season,
+      sonarr_episode_id: 9_101,
+      episode_number: 1,
+      metadata_json: { "ambiguous_mapping" => true }
+    )
+    original_series_created_at = 7.days.ago.change(usec: 0)
+    original_episode_created_at = 6.days.ago.change(usec: 0)
+    series.update_columns(created_at: original_series_created_at, updated_at: original_series_created_at)
+    episode.update_columns(created_at: original_episode_created_at, updated_at: original_episode_created_at)
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(integration, raise_on_unsupported: true).and_return(health_check)
+
+    adapter = instance_double(Integrations::SonarrAdapter)
+    allow(Integrations::SonarrAdapter).to receive(:new).with(integration:).and_return(adapter)
+    allow(adapter).to receive(:fetch_series).and_return(
+      [
+        {
+          sonarr_series_id: 9_100,
+          title: "CreatedAt Show",
+          statistics: { total_episode_count: 1, episode_file_count: 0 },
+          metadata: { arr_added_at: "2024-10-08T04:18:29Z" }
+        }
+      ]
+    )
+    allow(adapter).to receive(:fetch_episodes).with(series_id: 9_100).and_return(
+      [
+        {
+          sonarr_episode_id: 9_101,
+          season_number: 1,
+          episode_number: 1,
+          external_ids: { tvdb_id: 123_001 }
+        }
+      ]
+    )
+    allow(adapter).to receive(:fetch_episode_files).with(series_id: 9_100).and_return([])
+
+    described_class.new(sync_run:, correlation_id: "corr-sonarr-created-at").call
+
+    series.reload
+    episode.reload
+    expect(series.created_at.to_i).to eq(original_series_created_at.to_i)
+    expect(episode.created_at.to_i).to eq(original_episode_created_at.to_i)
+    expect(series.metadata_json).to include("low_confidence_mapping" => true, "arr_added_at" => "2024-10-08T04:18:29Z")
+    expect(episode.metadata_json).to include("ambiguous_mapping" => true)
+    expect(episode.metadata_json["external_ids"]).to include("tvdb_id" => 123_001)
+  end
+
   it "seeds phase totals from series statistics before processing children" do
     integration = Integration.create!(
       kind: "sonarr",

@@ -33,7 +33,8 @@ module Integrations
           plex_guid: movie["ratings"]&.dig("plex", "guid"),
           metadata: {
             path: movie["path"],
-            monitored: movie["monitored"]
+            monitored: movie["monitored"],
+            arr_added_at: movie["added"]
           }.compact
         }
       end
@@ -127,7 +128,8 @@ module Integrations
         radarr_movie_id: (radarr_movie_id || ensure_present!(movie_file, :movieId)).to_i,
         path: ensure_present!(movie_file, :path).to_s,
         size_bytes: ensure_present!(movie_file, :size).to_i,
-        quality: movie_file["quality"] || {}
+        quality: movie_file["quality"] || {},
+        date_added_at: movie_file["dateAdded"]
       }
     end
 

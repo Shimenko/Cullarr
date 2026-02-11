@@ -32,7 +32,8 @@ module Integrations
           },
           metadata: {
             path: series["path"],
-            monitored: series["monitored"]
+            monitored: series["monitored"],
+            arr_added_at: series["added"]
           }.compact
         }
       end
@@ -84,7 +85,8 @@ module Integrations
           sonarr_episode_id: episode_id&.to_i,
           path: ensure_present!(episode_file, :path).to_s,
           size_bytes: ensure_present!(episode_file, :size).to_i,
-          quality: episode_file["quality"] || {}
+          quality: episode_file["quality"] || {},
+          date_added_at: episode_file["dateAdded"]
         }
       end
     end

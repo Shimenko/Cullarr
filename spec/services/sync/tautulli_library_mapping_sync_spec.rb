@@ -204,5 +204,66 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
     expect(movie.plex_rating_key).to eq("plex-old-key")
     expect(movie.metadata_json["ambiguous_mapping"]).to be(true)
   end
+
+  it "falls back to unique movie title and year when path and external ids are missing" do
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Title/Year Mapping",
+      base_url: "https://tautulli.title-year.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: { "tautulli_history_page_size" => 100 }
+    )
+    radarr = Integration.create!(
+      kind: "radarr",
+      name: "Radarr Title/Year Mapping",
+      base_url: "https://radarr.title-year.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    movie = Movie.create!(
+      integration: radarr,
+      radarr_movie_id: 6_001,
+      title: "Fallback Matched Movie",
+      year: 2024,
+      metadata_json: {}
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 40, title: "Movies", section_type: "movie" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 40, start: 0, length: 100).and_return(
+      {
+        rows: [
+          {
+            media_type: "movie",
+            title: "Fallback Matched Movie",
+            year: 2024,
+            plex_rating_key: "plex-movie-6001",
+            plex_guid: "plex://movie/6001",
+            plex_added_at: "2024-10-09T01:54:18Z",
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-title-year").call
+
+    expect(result).to include(rows_mapped_by_title_year: 1, watchables_updated: 1, rows_unmapped: 0)
+    movie.reload
+    expect(movie.plex_rating_key).to eq("plex-movie-6001")
+    expect(movie.plex_guid).to eq("plex://movie/6001")
+    expect(movie.metadata_json["low_confidence_mapping"]).to be(true)
+    expect(movie.metadata_json["plex_added_at"]).to eq("2024-10-09T01:54:18Z")
+  end
 end
 # rubocop:enable RSpec/ExampleLength, RSpec/MultipleExpectations, RSpec/ReceiveMessages

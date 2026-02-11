@@ -532,7 +532,11 @@ module Candidates
         mapping_status: mapping_status,
         risk_flags: risk_flags,
         blocker_flags: blocker_flags,
-        reasons: reasons_for(created_at: movie.created_at, watched_summary:, reclaimable_bytes:),
+        reasons: reasons_for(
+          added_at: added_timestamp_for_watchable(watchable: movie, fallback_timestamp: movie.created_at),
+          watched_summary: watched_summary,
+          reclaimable_bytes: reclaimable_bytes
+        ),
         movie_id: movie.id,
         year: movie.year,
         version_count: media_files.size,
@@ -555,7 +559,11 @@ module Candidates
         mapping_status: snapshot[:mapping_status],
         risk_flags: snapshot[:risk_flags],
         blocker_flags: snapshot[:blocker_flags],
-        reasons: reasons_for(created_at: episode.created_at, watched_summary: snapshot[:watched_summary], reclaimable_bytes: snapshot[:reclaimable_bytes]),
+        reasons: reasons_for(
+          added_at: added_timestamp_for_watchable(watchable: episode, fallback_timestamp: episode.created_at),
+          watched_summary: snapshot[:watched_summary],
+          reclaimable_bytes: snapshot[:reclaimable_bytes]
+        ),
         episode_id: episode.id,
         series_id: episode.season&.series_id,
         season_number: episode.season&.season_number,
@@ -589,7 +597,7 @@ module Candidates
         mapping_status: mapping_status,
         risk_flags: risk_flags,
         blocker_flags: blocker_flags.uniq,
-        reasons: reasons_for(created_at: season.created_at, watched_summary:, reclaimable_bytes:),
+        reasons: reasons_for(added_at: season.created_at, watched_summary:, reclaimable_bytes:),
         season_id: season.id,
         series_id: season.series_id,
         season_number: season.season_number,
@@ -625,7 +633,11 @@ module Candidates
         mapping_status: mapping_status,
         risk_flags: risk_flags,
         blocker_flags: blocker_flags.uniq,
-        reasons: reasons_for(created_at: series.created_at, watched_summary:, reclaimable_bytes:),
+        reasons: reasons_for(
+          added_at: added_timestamp_for_watchable(watchable: series, fallback_timestamp: series.created_at),
+          watched_summary: watched_summary,
+          reclaimable_bytes: reclaimable_bytes
+        ),
         series_id: series.id,
         season_count: series.seasons.size,
         episode_count: episode_count,
@@ -787,13 +799,31 @@ module Candidates
         !watched_for_user?(watch_stat:, duration_ms:)
     end
 
-    def reasons_for(created_at:, watched_summary:, reclaimable_bytes:)
+    def reasons_for(added_at:, watched_summary:, reclaimable_bytes:)
       reasons = []
       reasons << "watched_by_all_selected_users" if watched_summary[:all_selected_users_watched]
       reasons << "last_watched_days_ago:#{days_ago(watched_summary[:last_watched_at])}" if watched_summary[:last_watched_at]
-      reasons << "added_days_ago:#{days_ago(created_at)}" if created_at
+      reasons << "added_days_ago:#{days_ago(added_at)}" if added_at
       reasons << format("reclaims_gb:%.2f", reclaimable_bytes.to_f / 1.gigabyte)
       reasons
+    end
+
+    def added_timestamp_for_watchable(watchable:, fallback_timestamp:)
+      metadata = watchable.respond_to?(:metadata_json) && watchable.metadata_json.is_a?(Hash) ? watchable.metadata_json : {}
+      added_timestamp_from_metadata(metadata, key: "arr_added_at") ||
+        added_timestamp_from_metadata(metadata, key: "plex_added_at") ||
+        fallback_timestamp
+    end
+
+    def added_timestamp_from_metadata(metadata, key:)
+      raw_value = metadata[key]
+      return nil if raw_value.blank?
+
+      return raw_value.to_time if raw_value.respond_to?(:to_time)
+
+      Time.zone.parse(raw_value.to_s)
+    rescue ArgumentError
+      nil
     end
 
     def days_ago(timestamp)

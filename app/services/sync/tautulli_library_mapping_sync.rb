@@ -17,6 +17,7 @@ module Sync
         rows_invalid: 0,
         rows_mapped_by_path: 0,
         rows_mapped_by_external_ids: 0,
+        rows_mapped_by_title_year: 0,
         rows_ambiguous: 0,
         rows_unmapped: 0,
         watchables_updated: 0,
@@ -44,6 +45,7 @@ module Sync
           "rows_processed=#{integration_counts[:rows_processed]} rows_invalid=#{integration_counts[:rows_invalid]} " \
           "rows_mapped_by_path=#{integration_counts[:rows_mapped_by_path]} " \
           "rows_mapped_by_external_ids=#{integration_counts[:rows_mapped_by_external_ids]} " \
+          "rows_mapped_by_title_year=#{integration_counts[:rows_mapped_by_title_year]} " \
           "rows_ambiguous=#{integration_counts[:rows_ambiguous]} rows_unmapped=#{integration_counts[:rows_unmapped]} " \
           "watchables_updated=#{integration_counts[:watchables_updated]} " \
           "watchables_unchanged=#{integration_counts[:watchables_unchanged]} " \
@@ -66,6 +68,7 @@ module Sync
         rows_invalid: 0,
         rows_mapped_by_path: 0,
         rows_mapped_by_external_ids: 0,
+        rows_mapped_by_title_year: 0,
         rows_ambiguous: 0,
         rows_unmapped: 0,
         watchables_updated: 0,
@@ -151,6 +154,7 @@ module Sync
         rows_processed: 0,
         rows_mapped_by_path: 0,
         rows_mapped_by_external_ids: 0,
+        rows_mapped_by_title_year: 0,
         rows_ambiguous: 0,
         rows_unmapped: 0,
         watchables_updated: 0,
@@ -161,6 +165,7 @@ module Sync
       path_lookup = build_path_lookup(rows)
       movie_match_index = build_movie_match_index(rows)
       episode_match_index = build_episode_match_index(rows)
+      movie_title_year_match_index = build_movie_title_year_match_index(rows)
 
       rows.each do |row|
         counts[:rows_processed] += 1
@@ -168,7 +173,8 @@ module Sync
           row: row,
           path_lookup: path_lookup,
           movie_match_index: movie_match_index,
-          episode_match_index: episode_match_index
+          episode_match_index: episode_match_index,
+          movie_title_year_match_index: movie_title_year_match_index
         )
 
         case resolution.fetch(:status)
@@ -190,6 +196,8 @@ module Sync
 
           if resolution.fetch(:confidence) == :path
             counts[:rows_mapped_by_path] += 1
+          elsif resolution.fetch(:confidence) == :title_year
+            counts[:rows_mapped_by_title_year] += 1
           else
             counts[:rows_mapped_by_external_ids] += 1
           end
@@ -269,7 +277,32 @@ module Sync
       }
     end
 
-    def resolve_watchable(row:, path_lookup:, movie_match_index:, episode_match_index:)
+    def build_movie_title_year_match_index(rows)
+      movie_rows = rows.select { |row| row[:media_type] == "movie" }
+      keys = movie_rows.filter_map do |row|
+        normalized_title = normalized_title_for_match(row[:title])
+        next if normalized_title.blank?
+
+        [ normalized_title, normalized_year_for_match(row[:year]) ]
+      end.uniq
+      return {} if keys.empty?
+
+      titles = keys.map(&:first).uniq
+      candidates = Movie.where("LOWER(title) IN (?)", titles).to_a
+
+      grouped = Hash.new { |hash, key| hash[key] = [] }
+      candidates.each do |movie|
+        grouped[
+          [
+            normalized_title_for_match(movie.title),
+            normalized_year_for_match(movie.year)
+          ]
+        ] << movie
+      end
+      grouped.transform_values { |movies| movies.uniq(&:id) }
+    end
+
+    def resolve_watchable(row:, path_lookup:, movie_match_index:, episode_match_index:, movie_title_year_match_index:)
       path_resolution = resolve_by_path(row:, path_lookup:)
       return path_resolution if path_resolution.present?
 
@@ -279,6 +312,12 @@ module Sync
         episode_match_index: episode_match_index
       )
       return external_resolution if external_resolution.present?
+
+      title_year_resolution = resolve_movie_by_title_and_year(
+        row: row,
+        movie_title_year_match_index: movie_title_year_match_index
+      )
+      return title_year_resolution if title_year_resolution.present?
 
       { status: :unmapped }
     end
@@ -330,6 +369,20 @@ module Sync
       matches.uniq(&:id)
     end
 
+    def resolve_movie_by_title_and_year(row:, movie_title_year_match_index:)
+      return nil unless row[:media_type] == "movie"
+
+      normalized_title = normalized_title_for_match(row[:title])
+      return nil if normalized_title.blank?
+
+      key = [ normalized_title, normalized_year_for_match(row[:year]) ]
+      matches = movie_title_year_match_index[key] || []
+      return nil if matches.empty?
+      return { status: :ambiguous } if matches.size > 1
+
+      { status: :mapped, watchable: matches.first, confidence: :title_year }
+    end
+
     def apply_mapping!(watchable:, row:, confidence:)
       attrs = {}
       metadata = watchable.metadata_json.is_a?(Hash) ? watchable.metadata_json.deep_dup : {}
@@ -356,6 +409,7 @@ module Sync
         attrs[:plex_guid] = incoming_guid if existing_guid != incoming_guid
       end
 
+      metadata["plex_added_at"] = row[:plex_added_at] if row[:plex_added_at].present?
       if confidence == :path
         metadata["ambiguous_mapping"] = false
         metadata["low_confidence_mapping"] = false
@@ -401,6 +455,15 @@ module Sync
     def metadata_changed?(current, desired)
       current_hash = current.is_a?(Hash) ? current : {}
       current_hash != desired
+    end
+
+    def normalized_title_for_match(value)
+      value.to_s.strip.downcase.presence
+    end
+
+    def normalized_year_for_match(value)
+      parsed = Integer(value.to_s, exception: false)
+      parsed&.positive? ? parsed : nil
     end
 
     def log_info(message)

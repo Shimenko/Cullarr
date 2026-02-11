@@ -93,7 +93,13 @@ RSpec.describe Integrations::TautulliAdapter, type: :service do
     expect(page[:rows].size).to eq(2)
     expect(page[:raw_rows_count]).to eq(3)
     expect(page[:rows_skipped_invalid]).to eq(1)
-    expect(page[:rows].first).to include(media_type: "movie", plex_rating_key: "plex-movie-111")
+    expect(page[:rows].first).to include(
+      media_type: "movie",
+      plex_rating_key: "plex-movie-111",
+      title: "Example Movie",
+      year: 2024,
+      plex_added_at: "2023-11-14T22:13:20Z"
+    )
     expect(page[:rows].last).to include(media_type: "episode", plex_rating_key: "plex-episode-222")
     stubs.verify_stubbed_calls
   end

@@ -211,6 +211,9 @@ module Integrations
         plex_grandparent_rating_key: first_present(row, :grandparent_rating_key, :grandparentRatingKey)&.to_s&.presence,
         season_number: integer_or_nil(first_present(row, :parent_media_index, :parentMediaIndex, :season_number, :seasonNumber)),
         episode_number: integer_or_nil(first_present(row, :media_index, :mediaIndex, :episode_number, :episodeNumber)),
+        title: first_present(row, :title, :sort_title)&.to_s&.strip&.presence,
+        year: integer_or_nil(first_present(row, :year)),
+        plex_added_at: timestamp_from_unix(first_present(row, :added_at, :addedAt)),
         file_path: file_path,
         external_ids: external_ids
       }.compact
@@ -294,6 +297,13 @@ module Integrations
       return nil if parsed.nil? || parsed <= 0
 
       parsed
+    end
+
+    def timestamp_from_unix(value)
+      seconds = Integer(value.to_s, exception: false)
+      return nil if seconds.nil? || seconds <= 0
+
+      Time.zone.at(seconds).iso8601
     end
   end
 end

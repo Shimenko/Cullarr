@@ -169,8 +169,8 @@ module Sync
           tmdb_id: row[:tmdb_id],
           plex_rating_key: resolved_plex_value(existing_value: existing&.plex_rating_key, incoming_value: row[:plex_rating_key]),
           plex_guid: resolved_plex_value(existing_value: existing&.plex_guid, incoming_value: row[:plex_guid]),
-          metadata_json: row[:metadata] || {},
-          created_at: now,
+          metadata_json: merged_metadata_json(existing_metadata: existing&.metadata_json, incoming_metadata: row[:metadata] || {}),
+          created_at: existing&.created_at || now,
           updated_at: now
         }
       end
@@ -199,11 +199,13 @@ module Sync
 
       season_numbers = rows.map { |row| row.fetch(:season_number) }.uniq
       now = Time.current
+      existing_season_by_number = Season.where(series_id: series.id, season_number: season_numbers).index_by(&:season_number)
       season_payload = season_numbers.map do |season_number|
+        existing = existing_season_by_number[season_number]
         {
           series_id: series.id,
           season_number: season_number,
-          created_at: now,
+          created_at: existing&.created_at || now,
           updated_at: now
         }
       end
@@ -229,8 +231,11 @@ module Sync
           tmdb_id: row[:tmdb_id],
           plex_rating_key: resolved_plex_value(existing_value: existing&.plex_rating_key, incoming_value: row[:plex_rating_key]),
           plex_guid: resolved_plex_value(existing_value: existing&.plex_guid, incoming_value: row[:plex_guid]),
-          metadata_json: { external_ids: row[:external_ids] || {} },
-          created_at: now,
+          metadata_json: merged_metadata_json(
+            existing_metadata: existing&.metadata_json,
+            incoming_metadata: { external_ids: row[:external_ids] || {} }
+          ),
+          created_at: existing&.created_at || now,
           updated_at: now
         }
       end
@@ -252,12 +257,17 @@ module Sync
 
         index[episode_file_id] = episode_row.fetch(:sonarr_episode_id)
       end
+      existing_file_by_arr_file_id = MediaFile.where(
+        integration_id: integration.id,
+        arr_file_id: file_rows.map { |row| row.fetch(:arr_file_id) }
+      ).index_by(&:arr_file_id)
 
       now = Time.current
       payload = file_rows.filter_map do |row|
         source_episode_id = row[:sonarr_episode_id] || episode_source_ids_by_file[row.fetch(:arr_file_id)]
         episode_id = episode_ids_by_source[source_episode_id]
         next if episode_id.blank?
+        existing = existing_file_by_arr_file_id[row.fetch(:arr_file_id)]
 
         {
           attachable_type: "Episode",
@@ -267,9 +277,11 @@ module Sync
           path: row.fetch(:path),
           path_canonical: mapper.canonicalize(row.fetch(:path)),
           size_bytes: row.fetch(:size_bytes),
-          quality_json: row[:quality] || {},
+          quality_json: merged_metadata_json(existing_metadata: existing&.quality_json, incoming_metadata: row[:quality] || {}).merge(
+            "arr_file_added_at" => row[:date_added_at]
+          ).compact,
           updated_at: now,
-          created_at: now
+          created_at: existing&.created_at || now
         }
       end
 
@@ -294,6 +306,12 @@ module Sync
       return incoming_present if incoming_present.present?
 
       existing_value.to_s.strip.presence
+    end
+
+    def merged_metadata_json(existing_metadata:, incoming_metadata:)
+      existing_hash = existing_metadata.is_a?(Hash) ? existing_metadata : {}
+      incoming_hash = incoming_metadata.is_a?(Hash) ? incoming_metadata : {}
+      existing_hash.merge(incoming_hash)
     end
   end
 end

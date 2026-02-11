@@ -24,7 +24,7 @@ module CandidatesHelper
     "multiple_versions" => "Multiple Versions",
     "no_plex_mapping" => "Found in Sonarr/Radarr, not linked in Plex",
     "external_id_mismatch" => "Plex ID Conflict",
-    "low_confidence_mapping" => "Linked by IDs Only"
+    "low_confidence_mapping" => "Linked by Fallback Metadata"
   }.freeze
 
   BLOCKER_HINTS = {
@@ -38,12 +38,12 @@ module CandidatesHelper
 
   MAPPING_STATUS_LABELS = {
     "mapped_linked_in_plex" => "Mapped: Linked in Plex",
-    "mapped_linked_by_external_ids" => "Mapped: Linked by external IDs (review recommended)",
+    "mapped_linked_by_external_ids" => "Mapped: Linked by fallback metadata (review recommended)",
     "needs_review_conflicting_plex_matches" => "Needs review: Multiple possible Plex matches",
     "needs_review_plex_id_conflict" => "Needs review: Plex identifiers conflict",
     "unmapped_check_path_mapping_between_arr_and_plex" => "Unmapped: Path mismatch between ARR and Plex",
     "unmapped_plex_data_missing_identifiers" => "Unmapped: Plex data missing path/IDs",
-    "unmapped_found_in_arr_not_linked_in_plex" => "Unmapped: Found in Sonarr/Radarr, not in Plex scan",
+    "unmapped_found_in_arr_not_linked_in_plex" => "Unmapped: Found in Sonarr/Radarr, not linked to Plex yet",
     "rollup_mapped_linked_in_plex" => "Mapped: All episodes linked in Plex",
     "rollup_mapped_with_external_id_links" => "Mapped: Some episodes linked by external IDs",
     "rollup_unmapped_contains_unlinked_items" => "Unmapped: Rollup includes unlinked episodes",
@@ -52,12 +52,12 @@ module CandidatesHelper
 
   MAPPING_STATUS_HINTS = {
     "mapped_linked_in_plex" => "Identity mapping is stable and linked by Plex key.",
-    "mapped_linked_by_external_ids" => "Linked through external IDs. Verify path mapping for stronger confidence.",
+    "mapped_linked_by_external_ids" => "Linked through fallback metadata (for example external IDs or title/year). Verify before delete.",
     "needs_review_conflicting_plex_matches" => "Multiple candidates matched the same Plex identity. Resolve before deletion.",
     "needs_review_plex_id_conflict" => "External IDs disagree with existing Plex identity metadata.",
     "unmapped_check_path_mapping_between_arr_and_plex" => "Configure ARR-to-Plex path mapping (for example /storage/... -> /home/... ).",
     "unmapped_plex_data_missing_identifiers" => "Tautulli/Plex did not provide enough path or external-ID data to match.",
-    "unmapped_found_in_arr_not_linked_in_plex" => "Item exists in Sonarr/Radarr but was not seen in Plex/Tautulli library mapping.",
+    "unmapped_found_in_arr_not_linked_in_plex" => "Item exists in Sonarr/Radarr but is not linked to a Plex item yet.",
     "rollup_mapped_linked_in_plex" => "Every episode in this rollup is mapped to Plex.",
     "rollup_mapped_with_external_id_links" => "Rollup is mapped, but some episodes rely on external-ID fallback matching.",
     "rollup_unmapped_contains_unlinked_items" => "At least one episode is not linked to Plex yet.",

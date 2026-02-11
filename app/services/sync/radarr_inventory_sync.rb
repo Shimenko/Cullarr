@@ -81,8 +81,8 @@ module Sync
           plex_rating_key: resolved_plex_value(existing_value: existing&.plex_rating_key, incoming_value: row[:plex_rating_key]),
           plex_guid: resolved_plex_value(existing_value: existing&.plex_guid, incoming_value: row[:plex_guid]),
           duration_ms: row[:duration_ms],
-          metadata_json: row[:metadata] || {},
-          created_at: now,
+          metadata_json: merged_metadata_json(existing_metadata: existing&.metadata_json, incoming_metadata: row[:metadata] || {}),
+          created_at: existing&.created_at || now,
           updated_at: now
         }
       end
@@ -97,11 +97,16 @@ module Sync
         integration_id: integration.id,
         radarr_movie_id: movie_rows.map { |row| row.fetch(:radarr_movie_id) }
       ).pluck(:radarr_movie_id, :id).to_h
+      existing_file_by_arr_file_id = MediaFile.where(
+        integration_id: integration.id,
+        arr_file_id: file_rows.map { |row| row.fetch(:arr_file_id) }
+      ).index_by(&:arr_file_id)
 
       now = Time.current
       payload = file_rows.filter_map do |row|
         movie_id = movie_ids_by_source[row[:radarr_movie_id]]
         next if movie_id.blank?
+        existing = existing_file_by_arr_file_id[row.fetch(:arr_file_id)]
 
         {
           attachable_type: "Movie",
@@ -111,8 +116,10 @@ module Sync
           path: row.fetch(:path),
           path_canonical: mapper.canonicalize(row.fetch(:path)),
           size_bytes: row.fetch(:size_bytes),
-          quality_json: row[:quality] || {},
-          created_at: now,
+          quality_json: merged_metadata_json(existing_metadata: existing&.quality_json, incoming_metadata: row[:quality] || {}).merge(
+            "arr_file_added_at" => row[:date_added_at]
+          ).compact,
+          created_at: existing&.created_at || now,
           updated_at: now
         }
       end
@@ -213,6 +220,12 @@ module Sync
       return incoming_present if incoming_present.present?
 
       existing_value.to_s.strip.presence
+    end
+
+    def merged_metadata_json(existing_metadata:, incoming_metadata:)
+      existing_hash = existing_metadata.is_a?(Hash) ? existing_metadata : {}
+      incoming_hash = incoming_metadata.is_a?(Hash) ? incoming_metadata : {}
+      existing_hash.merge(incoming_hash)
     end
   end
 end

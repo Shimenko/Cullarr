@@ -566,6 +566,44 @@ RSpec.describe Candidates::Query, type: :service do
       expect(rows_by_title.dig("Low Confidence Movie", :mapping_status, :code)).to eq("mapped_linked_by_external_ids")
     end
 
+    it "prefers ARR-added timestamps over record created_at for added-day reasons" do
+      integration = create_integration!(name: "Radarr Added Date Source", host: "added-date-source")
+      user = PlexUser.create!(tautulli_user_id: 7017, friendly_name: "Added Date User", is_hidden: false)
+
+      movie = Movie.create!(
+        integration: integration,
+        radarr_movie_id: 7_777,
+        title: "Added Date Movie",
+        duration_ms: 100_000,
+        metadata_json: { "arr_added_at" => 10.days.ago.iso8601 }
+      )
+      movie.update_columns(created_at: Time.current, updated_at: Time.current)
+      MediaFile.create!(
+        attachable: movie,
+        integration: integration,
+        arr_file_id: 7_778,
+        path: "/media/movies/added-date-source.mkv",
+        path_canonical: "/media/movies/added-date-source.mkv",
+        size_bytes: 1.gigabyte
+      )
+      WatchStat.create!(plex_user: user, watchable: movie, play_count: 1)
+
+      result = described_class.new(
+        scope: "movie",
+        plex_user_ids: [ user.id ],
+        include_blocked: false,
+        watched_match_mode: "all",
+        cursor: nil,
+        limit: nil
+      ).call
+
+      row = result.items.find { |item| item[:candidate_id] == "movie:#{movie.id}" }
+      added_reason = row[:reasons].find { |reason| reason.start_with?("added_days_ago:") }
+      expect(row).to be_present
+      expect(added_reason).to be_present
+      expect(added_reason.split(":").last.to_i).to be >= 10
+    end
+
     it "returns ARR-managed diagnostics and excludes non-radarr movie rows from movie scope" do
       managed_integration = Integration.create!(
         kind: "radarr",

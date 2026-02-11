@@ -262,6 +262,53 @@ RSpec.describe Sync::RadarrInventorySync, type: :service do
     expect(movie.plex_guid).to eq("plex://movie/5100")
   end
 
+  it "preserves existing created_at and metadata flags across inventory upserts" do
+    integration = Integration.create!(
+      kind: "radarr",
+      name: "Radarr Preserve CreatedAt",
+      base_url: "https://radarr.created-at.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: { "radarr_moviefile_fetch_workers" => 1 }
+    )
+
+    existing_movie = Movie.create!(
+      integration: integration,
+      radarr_movie_id: 8_100,
+      title: "Created At Movie",
+      metadata_json: { "low_confidence_mapping" => true }
+    )
+    original_created_at = 5.days.ago.change(usec: 0)
+    existing_movie.update_columns(created_at: original_created_at, updated_at: original_created_at)
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(integration, raise_on_unsupported: true).and_return(health_check)
+
+    adapter = instance_double(Integrations::RadarrAdapter)
+    allow(Integrations::RadarrAdapter).to receive(:new).with(integration:).and_return(adapter)
+    allow(adapter).to receive(:fetch_movies).and_return(
+      [
+        {
+          radarr_movie_id: 8_100,
+          title: "Created At Movie",
+          has_file: false,
+          movie_file_id: nil,
+          movie_file: nil,
+          metadata: { arr_added_at: "2024-10-09T01:54:18Z" }
+        }
+      ]
+    )
+
+    described_class.new(sync_run:, correlation_id: "corr-radarr-created-at").call
+
+    existing_movie.reload
+    expect(existing_movie.created_at.to_i).to eq(original_created_at.to_i)
+    expect(existing_movie.metadata_json).to include(
+      "low_confidence_mapping" => true,
+      "arr_added_at" => "2024-10-09T01:54:18Z"
+    )
+  end
+
   it "emits incremental phase progress updates during fetch and fallback lookups" do
     integration = Integration.create!(
       kind: "radarr",

@@ -7,6 +7,9 @@
         {
           "media_type": "movie",
           "rating_key": "plex-movie-111",
+          "title": "Example Movie",
+          "year": 2024,
+          "added_at": "1700000000",
           "guid": "plex://movie/111",
           "file": "/mnt/movies/Example Movie (2024)/movie.mkv",
           "imdb_id": "tt111111",
