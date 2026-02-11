@@ -1,18 +1,30 @@
 import { Controller } from "@hotwired/stimulus"
 import { createRunsSubscription } from "channels/runs_channel"
 
-const STREAM_STALE_AFTER_MS = 1_000
-const POLL_INTERVAL_MS = 1_000
+const CONNECTION_CHECK_INTERVAL_MS = 1_000
+const DISCONNECTED_GRACE_MS = 10_000
+const FALLBACK_POLL_START_MS = 5_000
+const FALLBACK_POLL_MAX_MS = 30_000
 
 // Connects to data-controller="stream-status"
 export default class extends Controller {
   static targets = ["syncStatus", "deletionStatus"]
 
   connect() {
-    this.lastStreamEventAt = Date.now()
+    this.connectionState = "connecting"
+    this.disconnectedAt = null
+    this.nextPollAt = null
+    this.currentPollIntervalMs = FALLBACK_POLL_START_MS
     this.refreshInFlight = false
-    this.pollTimer = window.setInterval(() => this.pollForSnapshotRefresh(), POLL_INTERVAL_MS)
-    this.subscription = createRunsSubscription((payload) => this.handleStreamEvent(payload))
+    this.pollTimer = window.setInterval(() => this.pollForSnapshotRefresh(), CONNECTION_CHECK_INTERVAL_MS)
+    this.subscription = createRunsSubscription(
+      (payload) => this.handleStreamEvent(payload),
+      {
+        connected: () => this.handleStreamConnected(),
+        disconnected: () => this.handleStreamDisconnected(),
+        rejected: () => this.handleStreamRejected()
+      }
+    )
   }
 
   disconnect() {
@@ -26,9 +38,47 @@ export default class extends Controller {
     }
   }
 
-  handleStreamEvent(payload) {
-    this.lastStreamEventAt = Date.now()
+  handleStreamConnected() {
+    const recoveredFromDisconnect = this.connectionState === "disconnected" || this.connectionState === "rejected"
+    this.connectionState = "connected"
+    this.disconnectedAt = null
+    this.nextPollAt = null
+    this.currentPollIntervalMs = FALLBACK_POLL_START_MS
 
+    if (!recoveredFromDisconnect) {
+      return
+    }
+
+    const connectedAt = new Date().toLocaleTimeString()
+    this.setStatusMessage(`Realtime stream reconnected at ${connectedAt}.`)
+    void this.refreshSnapshotsAfterReconnect()
+  }
+
+  handleStreamDisconnected() {
+    if (this.connectionState === "disconnected") {
+      return
+    }
+
+    this.connectionState = "disconnected"
+    this.disconnectedAt = Date.now()
+    this.nextPollAt = this.disconnectedAt + DISCONNECTED_GRACE_MS
+    this.currentPollIntervalMs = FALLBACK_POLL_START_MS
+    this.setStatusMessage("Realtime stream disconnected; retrying websocket before polling fallback.")
+  }
+
+  handleStreamRejected() {
+    if (this.connectionState === "rejected") {
+      return
+    }
+
+    this.connectionState = "rejected"
+    this.disconnectedAt = Date.now()
+    this.nextPollAt = this.disconnectedAt + DISCONNECTED_GRACE_MS
+    this.currentPollIntervalMs = FALLBACK_POLL_START_MS
+    this.setStatusMessage("Realtime stream subscription rejected; retrying websocket before polling fallback.")
+  }
+
+  handleStreamEvent(payload) {
     const eventName = String(payload.event || "")
 
     if (eventName === "sync_run.updated" && this.hasSyncStatusTarget) {
@@ -57,11 +107,15 @@ export default class extends Controller {
       return
     }
 
-    const streamFresh = (Date.now() - this.lastStreamEventAt) < STREAM_STALE_AFTER_MS
-    if (streamFresh) {
+    if (!this.shouldUsePollingFallback()) {
       return
     }
 
+    if (this.nextPollAt && Date.now() < this.nextPollAt) {
+      return
+    }
+
+    this.scheduleNextPollingAttempt()
     this.refreshInFlight = true
     try {
       let refreshed = false
@@ -77,13 +131,9 @@ export default class extends Controller {
         return
       }
 
-      this.lastStreamEventAt = Date.now()
-      const refreshedAt = new Date().toLocaleTimeString()
-      if (this.hasSyncStatusTarget) {
-        this.syncStatusTarget.textContent = `Stream was stale; snapshot refreshed via polling at ${refreshedAt}.`
-      }
-      if (this.hasDeletionStatusTarget) {
-        this.deletionStatusTarget.textContent = `Stream was stale; snapshot refreshed via polling at ${refreshedAt}.`
+      if (this.shouldUsePollingFallback()) {
+        const refreshedAt = new Date().toLocaleTimeString()
+        this.setStatusMessage(`Realtime stream unavailable; snapshot refreshed via polling at ${refreshedAt}.`)
       }
     } catch (_error) {
       // Keep the page stable; polling is best-effort fallback.
@@ -142,5 +192,45 @@ export default class extends Controller {
 
     target.innerHTML = source.innerHTML
     return true
+  }
+
+  shouldUsePollingFallback() {
+    return this.connectionState === "disconnected" || this.connectionState === "rejected"
+  }
+
+  scheduleNextPollingAttempt() {
+    this.nextPollAt = Date.now() + this.currentPollIntervalMs
+    this.currentPollIntervalMs = Math.min(this.currentPollIntervalMs * 2, FALLBACK_POLL_MAX_MS)
+  }
+
+  setStatusMessage(message) {
+    if (this.hasSyncStatusTarget) {
+      this.syncStatusTarget.textContent = message
+    }
+    if (this.hasDeletionStatusTarget) {
+      this.deletionStatusTarget.textContent = message
+    }
+  }
+
+  async refreshSnapshotsAfterReconnect() {
+    if (document.hidden || this.refreshInFlight) {
+      return
+    }
+
+    this.refreshInFlight = true
+    try {
+      let refreshed = false
+      if (this.hasRunsSnapshot()) {
+        refreshed = await this.refreshRunsSnapshotsFromPolling()
+      }
+
+      if (!refreshed && this.hasDeletionRunSnapshot()) {
+        await this.refreshDeletionRunSnapshotFromPolling()
+      }
+    } catch (_error) {
+      // Keep reconnect recovery best-effort to avoid UI interruptions.
+    } finally {
+      this.refreshInFlight = false
+    }
   }
 }

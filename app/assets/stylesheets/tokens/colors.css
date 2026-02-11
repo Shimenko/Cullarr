@@ -1,5 +1,6 @@
 :root,
 .theme-signal-dark {
+  color-scheme: dark;
   --bg: 222 40% 6%;
   --panel: 222 33% 9%;
   --panel-2: 222 28% 12%;
@@ -24,6 +25,7 @@
 }
 
 .theme-signal-light {
+  color-scheme: light;
   --bg: 210 40% 98%;
   --panel: 0 0% 100%;
   --panel-2: 210 35% 96%;

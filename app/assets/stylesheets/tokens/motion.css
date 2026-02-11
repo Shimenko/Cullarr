@@ -16,7 +16,7 @@
   transform: translateY(-1px);
 }
 
-.ui-progress-scan {
+.ui-progress-scan:not(.ui-progress-track) {
   animation: ui-progress-scan 1.4s linear infinite;
   background: linear-gradient(
     90deg,

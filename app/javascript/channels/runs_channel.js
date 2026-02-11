@@ -5,12 +5,28 @@ import {
   mapSyncRunStreamEvent
 } from "controllers/support/api_v1_mappers"
 
-export function createRunsSubscription(onEvent) {
+export function createRunsSubscription(onEvent, callbacks = {}) {
+  const onConnected = callbacks.connected
+  const onDisconnected = callbacks.disconnected
+  const onRejected = callbacks.rejected
+
   return consumer.subscriptions.create("RunsChannel", {
     connected() {
+      if (typeof onConnected === "function") {
+        onConnected()
+      }
     },
 
     disconnected() {
+      if (typeof onDisconnected === "function") {
+        onDisconnected()
+      }
+    },
+
+    rejected() {
+      if (typeof onRejected === "function") {
+        onRejected()
+      }
     },
 
     received(data) {

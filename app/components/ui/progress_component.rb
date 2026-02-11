@@ -36,18 +36,19 @@ class Ui::ProgressComponent < Ui::BaseComponent
     )
   end
 
-  def fill_attributes
-    classes = %W[ui-progress-fill ui-progress-fill-#{variant}]
+  def track_attributes
+    classes = %W[ui-progress-track ui-progress-track-#{variant}]
     classes << "ui-progress-scan" if animated && running?
 
     {
       class: classes.join(" "),
-      style: "width: #{percent}%"
+      value: clamped_value,
+      max: max
     }
   end
 
   def percent
-    ((value / max) * 100).clamp(0, 100).round(2)
+    ((clamped_value / max) * 100).clamp(0, 100).round(2)
   end
 
   def running?
@@ -62,5 +63,9 @@ class Ui::ProgressComponent < Ui::BaseComponent
     Float(value)
   rescue ArgumentError, TypeError
     raise ArgumentError, "#{self.class.name} expected #{name} to be numeric."
+  end
+
+  def clamped_value
+    value.clamp(0, max)
   end
 end

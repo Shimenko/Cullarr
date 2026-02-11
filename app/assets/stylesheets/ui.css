@@ -571,34 +571,69 @@ a:focus-visible {
 }
 
 .ui-progress-track {
+  --ui-progress-fill: hsl(var(--accent));
+  --ui-progress-scan-low: hsl(var(--accent) / 0.2);
+  --ui-progress-scan-high: hsl(var(--accent) / 0.55);
+  -webkit-appearance: none;
+  appearance: none;
   background-color: hsl(var(--panel-3));
   border: 1px solid hsl(var(--border));
   border-radius: var(--r-chip);
   block-size: 0.75rem;
+  inline-size: 100%;
   overflow: hidden;
 }
 
-.ui-progress-fill {
-  background-color: hsl(var(--accent));
-  block-size: 100%;
-  display: block;
-  transition: width var(--t-slow) var(--ease-out);
+.ui-progress-track::-webkit-progress-bar {
+  background-color: hsl(var(--panel-3));
 }
 
-.ui-progress-fill-accent {
-  background-color: hsl(var(--accent));
+.ui-progress-track::-webkit-progress-value {
+  background-color: var(--ui-progress-fill);
+  border-radius: var(--r-chip);
+  transition: background-position var(--t-med) linear;
 }
 
-.ui-progress-fill-success {
-  background-color: hsl(var(--success));
+.ui-progress-track::-moz-progress-bar {
+  background-color: var(--ui-progress-fill);
+  border-radius: var(--r-chip);
+  transition: background-position var(--t-med) linear;
 }
 
-.ui-progress-fill-warning {
-  background-color: hsl(var(--warning));
+.ui-progress-track-accent {
+  --ui-progress-fill: hsl(var(--accent));
+  --ui-progress-scan-low: hsl(var(--accent) / 0.2);
+  --ui-progress-scan-high: hsl(var(--accent) / 0.55);
 }
 
-.ui-progress-fill-danger {
-  background-color: hsl(var(--danger));
+.ui-progress-track-success {
+  --ui-progress-fill: hsl(var(--success));
+  --ui-progress-scan-low: hsl(var(--success) / 0.2);
+  --ui-progress-scan-high: hsl(var(--success) / 0.55);
+}
+
+.ui-progress-track-warning {
+  --ui-progress-fill: hsl(var(--warning));
+  --ui-progress-scan-low: hsl(var(--warning) / 0.2);
+  --ui-progress-scan-high: hsl(var(--warning) / 0.55);
+}
+
+.ui-progress-track-danger {
+  --ui-progress-fill: hsl(var(--danger));
+  --ui-progress-scan-low: hsl(var(--danger) / 0.2);
+  --ui-progress-scan-high: hsl(var(--danger) / 0.55);
+}
+
+.ui-progress-track.ui-progress-scan::-webkit-progress-value,
+.ui-progress-track.ui-progress-scan::-moz-progress-bar {
+  animation: ui-progress-scan 1.4s linear infinite;
+  background-image: linear-gradient(
+    90deg,
+    var(--ui-progress-scan-low) 0%,
+    var(--ui-progress-scan-high) 50%,
+    var(--ui-progress-scan-low) 100%
+  );
+  background-size: 180% 100%;
 }
 
 .ui-hold-confirm {

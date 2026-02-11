@@ -41,7 +41,6 @@
           const className = theme === "dark" ? DARK_CLASS : LIGHT_CLASS
           document.documentElement.classList.remove(DARK_CLASS, LIGHT_CLASS)
           document.documentElement.classList.add(className)
-          document.documentElement.style.colorScheme = theme
           if (document.body) {
             document.body.classList.remove(DARK_CLASS, LIGHT_CLASS)
             document.body.classList.add(className)

@@ -10,8 +10,9 @@ RSpec.describe Ui::ProgressComponent, type: :component do
 
     expect(fragment.css("span.ui-progress-label", text: "Sync").size).to eq(1)
     expect(fragment.css("div.ui-progress[data-progress-state='running']").size).to eq(1)
-    expect(fragment.css("span.ui-progress-fill.ui-progress-scan").size).to eq(1)
+    expect(fragment.css("progress.ui-progress-track.ui-progress-track-accent.ui-progress-scan").size).to eq(1)
     expect(fragment.css("span.ui-progress-caption", text: "45 / 120").size).to eq(1)
+    expect(fragment.css("progress[style]").size).to eq(0)
   end
 
   it "stops scan animation when progress is complete" do
@@ -20,7 +21,7 @@ RSpec.describe Ui::ProgressComponent, type: :component do
     )
 
     expect(fragment.css("div.ui-progress[data-progress-state='complete']").size).to eq(1)
-    expect(fragment.css("span.ui-progress-fill.ui-progress-scan").size).to eq(0)
+    expect(fragment.css("progress.ui-progress-track.ui-progress-scan").size).to eq(0)
   end
 
   it "rejects non-positive max" do
