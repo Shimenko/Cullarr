@@ -66,11 +66,17 @@ RSpec.describe "Candidates", type: :system do
     )
 
     visit "/candidates"
+    expect(page).to have_unchecked_field("candidate_plex_user_#{user_one.id}")
+    expect(page).to have_unchecked_field("candidate_plex_user_#{user_two.id}")
 
-    expect(page).to have_checked_field("candidate_plex_user_#{user_one.id}")
-    expect(page).to have_checked_field("candidate_plex_user_#{user_two.id}")
+    select "All selected users (strict)", from: "Watched Match"
+    check "candidate_plex_user_#{user_one.id}"
+    check "candidate_plex_user_#{user_two.id}"
+    click_button "Apply Filters"
+
     expect(page).to have_content("Eligible Unified Movie")
     expect(page).to have_css(".ui-chip.ui-chip-instance", text: integration.name)
+    expect(page).to have_css(".ui-chip.ui-chip-warning", text: "Unmapped: Plex data missing path/IDs")
     expect(page).not_to have_content("Blocked Unified Movie")
 
     check "Include blocked candidates"
@@ -118,6 +124,8 @@ RSpec.describe "Candidates", type: :system do
 
     visit "/candidates"
     select "TV Episode", from: "Scope"
+    select "All selected users (strict)", from: "Watched Match"
+    check "candidate_plex_user_#{plex_user.id}"
     click_button "Apply Filters"
 
     expect(page).to have_content("Scoped Episode")

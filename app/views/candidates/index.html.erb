@@ -7,7 +7,7 @@
   data-candidates-workflow-run-path-template-value="<%= deletion_run_path("__RUN_ID__") %>">
   <%= render Ui::PanelComponent.new(
     title: "Candidates",
-    subtitle: "Unified candidate view across integrations with strict guardrail visibility.",
+    subtitle: "ARR-managed candidate view with strict guardrail visibility. Plex-only media is excluded by design.",
     padding: :lg
   ) do %>
     <%= form_with url: candidates_path, method: :get, class: "grid gap-4 md:grid-cols-3", scope: nil do %>
@@ -32,6 +32,14 @@
         include_hidden: false,
         checked: @include_blocked
       ) %>
+
+      <div class="md:col-span-3">
+        <%= render Ui::InlineAlertComponent.new(
+          kind: :info,
+          title: "ARR-managed scope",
+          message: "This page only shows media managed by configured Sonarr/Radarr integrations. Plex-only items are intentionally excluded."
+        ) %>
+      </div>
 
       <div class="md:col-span-3">
         <p class="ui-help mb-2">Plex users (leave blank to use all users for watched matching)</p>
@@ -133,6 +141,22 @@
 
             <p class="ui-copy"><%= candidate_watched_summary_text(item[:watched_summary]) %></p>
 
+            <% if item[:mapping_status].present? %>
+              <div class="space-y-1">
+                <p class="ui-help">Mapping status</p>
+                <div class="flex flex-wrap gap-2">
+                  <%= render Ui::ChipComponent.new(
+                    label: candidate_mapping_status_label(item.dig(:mapping_status, :code)),
+                    kind: candidate_mapping_status_chip_kind(item.dig(:mapping_status, :state))
+                  ) %>
+                </div>
+                <% mapping_hint = candidate_mapping_status_hint(item.dig(:mapping_status, :code)) %>
+                <% if mapping_hint.present? %>
+                  <p class="ui-help"><%= mapping_hint %></p>
+                <% end %>
+              </div>
+            <% end %>
+
             <% if item[:multi_version_groups].any? %>
               <div class="rounded-lg border ui-border p-3">
                 <p class="ui-help mb-2">Explicit version selection required before delete planning.</p>
@@ -159,11 +183,12 @@
               </div>
             <% end %>
 
-            <% if item[:risk_flags].any? %>
+            <% visible_risk_flags = candidate_display_risk_flags(item[:risk_flags]) %>
+            <% if visible_risk_flags.any? %>
               <div class="space-y-1">
                 <p class="ui-help">Risk flags</p>
                 <div class="flex flex-wrap gap-2">
-                  <% item[:risk_flags].each do |flag| %>
+                  <% visible_risk_flags.each do |flag| %>
                     <%= render Ui::ChipComponent.new(label: candidate_flag_label(flag), kind: :risk) %>
                   <% end %>
                 </div>

@@ -111,6 +111,7 @@ module Candidates
         items: result.fetch(:items),
         next_cursor: result.fetch(:next_cursor),
         diagnostics: result.fetch(:diagnostics).merge(
+          content_scope: "arr_managed_only",
           selected_user_count: selected_user_ids.size,
           effective_selected_user_count: effective_user_ids.size
         )
@@ -256,11 +257,17 @@ module Candidates
     end
 
     def movie_scope
-      Movie.includes(:integration, :keep_markers, :watch_stats, media_files: :integration).order(id: :desc)
+      Movie
+        .joins(:integration)
+        .where(integrations: { kind: "radarr" })
+        .includes(:integration, :keep_markers, :watch_stats, media_files: :integration)
+        .order(id: :desc)
     end
 
     def episode_scope
       Episode
+        .joins(:integration)
+        .where(integrations: { kind: "sonarr" })
         .includes(
           :integration,
           :watch_stats,
@@ -273,6 +280,8 @@ module Candidates
 
     def season_scope
       Season
+        .joins(series: :integration)
+        .where(integrations: { kind: "sonarr" })
         .includes(
           { series: :integration },
           :keep_markers,
@@ -290,6 +299,8 @@ module Candidates
 
     def show_scope
       Series
+        .joins(:integration)
+        .where(integrations: { kind: "sonarr" })
         .includes(
           :integration,
           :keep_markers,
@@ -491,6 +502,11 @@ module Candidates
       watched_summary = watched_summary_for(watchable: movie, stats_by_user_id:, selected_user_ids:)
       media_files = movie.media_files
       reclaimable_bytes = media_files.sum(&:size_bytes)
+      mapping_status = mapping_status_for_watchable(
+        watchable: movie,
+        media_files: media_files,
+        integration: movie.integration
+      )
 
       risk_flags = []
       risk_flags << "multiple_versions" if media_files.size > 1
@@ -513,6 +529,7 @@ module Candidates
         integration_chips: integration_chips_for(fallback_integration: movie.integration, media_files:),
         reclaimable_bytes: reclaimable_bytes,
         watched_summary: watched_summary,
+        mapping_status: mapping_status,
         risk_flags: risk_flags,
         blocker_flags: blocker_flags,
         reasons: reasons_for(created_at: movie.created_at, watched_summary:, reclaimable_bytes:),
@@ -535,6 +552,7 @@ module Candidates
         integration_chips: integration_chips_for(fallback_integration: episode.integration, media_files: snapshot[:media_files]),
         reclaimable_bytes: snapshot[:reclaimable_bytes],
         watched_summary: snapshot[:watched_summary],
+        mapping_status: snapshot[:mapping_status],
         risk_flags: snapshot[:risk_flags],
         blocker_flags: snapshot[:blocker_flags],
         reasons: reasons_for(created_at: episode.created_at, watched_summary: snapshot[:watched_summary], reclaimable_bytes: snapshot[:reclaimable_bytes]),
@@ -554,6 +572,7 @@ module Candidates
       reclaimable_bytes = media_files.sum(&:size_bytes)
       episode_count = snapshots.size
       eligible_episode_count = snapshots.count { |snapshot| snapshot[:eligible] }
+      mapping_status = mapping_status_for_rollup(snapshots:)
 
       risk_flags = snapshots.flat_map { |snapshot| snapshot[:risk_flags] }.uniq
       blocker_flags = snapshots.flat_map { |snapshot| snapshot[:blocker_flags] }.uniq
@@ -567,6 +586,7 @@ module Candidates
         integration_chips: integration_chips_for(fallback_integration: season.series.integration, media_files:),
         reclaimable_bytes: reclaimable_bytes,
         watched_summary: watched_summary,
+        mapping_status: mapping_status,
         risk_flags: risk_flags,
         blocker_flags: blocker_flags.uniq,
         reasons: reasons_for(created_at: season.created_at, watched_summary:, reclaimable_bytes:),
@@ -588,6 +608,7 @@ module Candidates
       reclaimable_bytes = media_files.sum(&:size_bytes)
       episode_count = snapshots.size
       eligible_episode_count = snapshots.count { |snapshot| snapshot[:eligible] }
+      mapping_status = mapping_status_for_rollup(snapshots:)
 
       risk_flags = snapshots.flat_map { |snapshot| snapshot[:risk_flags] }.uniq
       blocker_flags = snapshots.flat_map { |snapshot| snapshot[:blocker_flags] }.uniq
@@ -601,6 +622,7 @@ module Candidates
         integration_chips: integration_chips_for(fallback_integration: series.integration, media_files:),
         reclaimable_bytes: reclaimable_bytes,
         watched_summary: watched_summary,
+        mapping_status: mapping_status,
         risk_flags: risk_flags,
         blocker_flags: blocker_flags.uniq,
         reasons: reasons_for(created_at: series.created_at, watched_summary:, reclaimable_bytes:),
@@ -643,6 +665,11 @@ module Candidates
       watched_summary = watched_summary_for(watchable: episode, stats_by_user_id:, selected_user_ids:)
       media_files = episode.media_files
       reclaimable_bytes = media_files.sum(&:size_bytes)
+      mapping_status = mapping_status_for_watchable(
+        watchable: episode,
+        media_files: media_files,
+        integration: episode.integration
+      )
 
       risk_flags = []
       risk_flags << "multiple_versions" if media_files.size > 1
@@ -662,6 +689,7 @@ module Candidates
         stats_by_user_id: stats_by_user_id,
         watched_summary: watched_summary,
         media_files: media_files,
+        mapping_status: mapping_status,
         reclaimable_bytes: reclaimable_bytes,
         risk_flags: risk_flags.uniq,
         blocker_flags: blocker_flags.uniq,
@@ -809,6 +837,64 @@ module Candidates
       chips = media_files.filter_map { |media_file| media_file.integration&.name }.uniq
       chips = [ fallback_integration.name ] if chips.empty? && fallback_integration.present?
       chips
+    end
+
+    def mapping_status_for_watchable(watchable:, media_files:, integration:)
+      return { code: "needs_review_conflicting_plex_matches", state: "needs_review" } if flag_enabled?(watchable.metadata_json, "ambiguous_mapping")
+      return { code: "needs_review_plex_id_conflict", state: "needs_review" } if flag_enabled?(watchable.metadata_json, "external_id_mismatch")
+      return { code: "mapped_linked_by_external_ids", state: "mapped" } if flag_enabled?(watchable.metadata_json, "low_confidence_mapping")
+      return { code: "mapped_linked_in_plex", state: "mapped" } if watchable.plex_rating_key.present?
+
+      {
+        code: unresolved_mapping_code_for(watchable:, media_files:, integration:),
+        state: "unmapped"
+      }
+    end
+
+    def unresolved_mapping_code_for(watchable:, media_files:, integration:)
+      return "unmapped_plex_data_missing_identifiers" unless watchable_has_external_ids?(watchable)
+
+      if integration_has_enabled_path_mappings?(integration)
+        "unmapped_found_in_arr_not_linked_in_plex"
+      elsif media_files.any?
+        "unmapped_check_path_mapping_between_arr_and_plex"
+      else
+        "unmapped_found_in_arr_not_linked_in_plex"
+      end
+    end
+
+    def watchable_has_external_ids?(watchable)
+      return watchable.tmdb_id.present? || watchable.imdb_id.present? if watchable.is_a?(Movie)
+
+      watchable.tvdb_id.present? || watchable.tmdb_id.present? || watchable.imdb_id.present?
+    end
+
+    def integration_has_enabled_path_mappings?(integration)
+      return false if integration.blank?
+
+      @enabled_path_mapping_cache ||= {}
+      return @enabled_path_mapping_cache[integration.id] if @enabled_path_mapping_cache.key?(integration.id)
+
+      @enabled_path_mapping_cache[integration.id] = integration.path_mappings.where(enabled: true).exists?
+    end
+
+    def mapping_status_for_rollup(snapshots:)
+      statuses = snapshots.map { |snapshot| snapshot[:mapping_status] }.compact
+      return { code: "rollup_unmapped_contains_unlinked_items", state: "unmapped" } if statuses.empty?
+
+      if statuses.any? { |status| status[:state] == "needs_review" }
+        return { code: "rollup_needs_review_contains_conflicts", state: "needs_review" }
+      end
+
+      if statuses.any? { |status| status[:state] == "unmapped" }
+        return { code: "rollup_unmapped_contains_unlinked_items", state: "unmapped" }
+      end
+
+      if statuses.any? { |status| status[:code] == "mapped_linked_by_external_ids" }
+        return { code: "rollup_mapped_with_external_id_links", state: "mapped" }
+      end
+
+      { code: "rollup_mapped_linked_in_plex", state: "mapped" }
     end
 
     def watched_mode

@@ -24,10 +24,13 @@ RSpec.describe "Candidates", type: :request do
       get "/candidates"
 
       expect(response).to have_http_status(:ok)
-      expect(response.body).to include("Candidates")
-      expect(response.body).to include("Include blocked candidates")
-      expect(response.body).to include("Watched Match")
-      expect(response.body).to include("Plex users (leave blank to use all users for watched matching)")
+      expect(response.body).to include(
+        "Candidates",
+        "Include blocked candidates",
+        "Watched Match",
+        "Plex users (leave blank to use all users for watched matching)",
+        "This page only shows media managed by configured Sonarr/Radarr integrations."
+      )
     end
   end
 end

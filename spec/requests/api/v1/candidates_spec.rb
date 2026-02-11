@@ -106,6 +106,7 @@ RSpec.describe "Api::V1::Candidates", type: :request do
       expect(payload.fetch("scope")).to eq("movie")
       expect(payload.dig("filters", "plex_user_ids")).to contain_exactly(user_one.id, user_two.id)
       expect(payload.dig("filters", "include_blocked")).to be(false)
+      expect(payload.dig("diagnostics", "content_scope")).to eq("arr_managed_only")
 
       row = payload.fetch("items").first
       expect(row.fetch("id")).to eq("movie:#{movie.id}")
@@ -114,6 +115,8 @@ RSpec.describe "Api::V1::Candidates", type: :request do
       expect(row.fetch("multi_version_groups")).to eq({ "movie:#{movie.id}" => row.fetch("media_file_ids") })
       expect(row.fetch("risk_flags")).to include("multiple_versions")
       expect(row.fetch("blocker_flags")).to eq([])
+      expect(row.dig("mapping_status", "state")).to eq("unmapped")
+      expect(row.dig("mapping_status", "code")).to be_present
       expect(row.dig("watched_summary", "all_selected_users_watched")).to be(true)
       expect(row.fetch("reasons")).to include("watched_by_all_selected_users")
     end

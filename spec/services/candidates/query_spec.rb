@@ -511,6 +511,115 @@ RSpec.describe Candidates::Query, type: :service do
       expect(row[:blocker_flags]).to include("path_excluded", "ambiguous_ownership")
     end
 
+    it "classifies plain-language mapping statuses for movie candidates" do
+      integration = create_integration!(name: "Radarr Mapping Status", host: "mapping-status")
+      user = PlexUser.create!(tautulli_user_id: 107, friendly_name: "Mapping Status User", is_hidden: false)
+
+      missing_ids_movie = Movie.create!(
+        integration: integration,
+        radarr_movie_id: 7_001,
+        title: "Missing IDs Movie",
+        plex_rating_key: nil,
+        imdb_id: nil,
+        tmdb_id: nil
+      )
+      path_mismatch_movie = Movie.create!(
+        integration: integration,
+        radarr_movie_id: 7_002,
+        title: "Path Mismatch Movie",
+        plex_rating_key: nil,
+        imdb_id: "tt07002",
+        tmdb_id: 7002
+      )
+      low_confidence_movie = Movie.create!(
+        integration: integration,
+        radarr_movie_id: 7_003,
+        title: "Low Confidence Movie",
+        plex_rating_key: "plex-7003",
+        metadata_json: { "low_confidence_mapping" => true }
+      )
+
+      [ missing_ids_movie, path_mismatch_movie, low_confidence_movie ].each_with_index do |movie, index|
+        MediaFile.create!(
+          attachable: movie,
+          integration: integration,
+          arr_file_id: 8_000 + index,
+          path: "/media/movies/mapping-status-#{index}.mkv",
+          path_canonical: "/media/movies/mapping-status-#{index}.mkv",
+          size_bytes: 1.gigabyte
+        )
+        WatchStat.create!(plex_user: user, watchable: movie, play_count: 1)
+      end
+
+      result = described_class.new(
+        scope: "movie",
+        plex_user_ids: [ user.id ],
+        include_blocked: false,
+        watched_match_mode: "all",
+        cursor: nil,
+        limit: nil
+      ).call
+
+      rows_by_title = result.items.index_by { |row| row[:title] }
+      expect(rows_by_title.dig("Missing IDs Movie", :mapping_status, :code)).to eq("unmapped_plex_data_missing_identifiers")
+      expect(rows_by_title.dig("Path Mismatch Movie", :mapping_status, :code)).to eq("unmapped_check_path_mapping_between_arr_and_plex")
+      expect(rows_by_title.dig("Low Confidence Movie", :mapping_status, :code)).to eq("mapped_linked_by_external_ids")
+    end
+
+    it "returns ARR-managed diagnostics and excludes non-radarr movie rows from movie scope" do
+      managed_integration = Integration.create!(
+        kind: "radarr",
+        name: "Radarr Managed",
+        base_url: "https://radarr.managed.local",
+        api_key: "secret",
+        verify_ssl: true
+      )
+      unmanaged_integration = Integration.create!(
+        kind: "sonarr",
+        name: "Sonarr Unmanaged Movie Source",
+        base_url: "https://sonarr.unmanaged-movie.local",
+        api_key: "secret",
+        verify_ssl: true
+      )
+      user = PlexUser.create!(tautulli_user_id: 108, friendly_name: "ARR Scope User", is_hidden: false)
+
+      managed_movie = Movie.create!(
+        integration: managed_integration,
+        radarr_movie_id: 9_001,
+        title: "Managed Movie",
+        duration_ms: 100_000
+      )
+      unmanaged_movie = Movie.create!(
+        integration: unmanaged_integration,
+        radarr_movie_id: 9_002,
+        title: "Unmanaged Movie",
+        duration_ms: 100_000
+      )
+      [ managed_movie, unmanaged_movie ].each_with_index do |movie, index|
+        MediaFile.create!(
+          attachable: movie,
+          integration: movie.integration,
+          arr_file_id: 9_100 + index,
+          path: "/media/movies/arr-scope-#{index}.mkv",
+          path_canonical: "/media/movies/arr-scope-#{index}.mkv",
+          size_bytes: 1.gigabyte
+        )
+        WatchStat.create!(plex_user: user, watchable: movie, play_count: 1)
+      end
+
+      result = described_class.new(
+        scope: "movie",
+        plex_user_ids: [ user.id ],
+        include_blocked: false,
+        watched_match_mode: "all",
+        cursor: nil,
+        limit: nil
+      ).call
+
+      expect(result.diagnostics[:content_scope]).to eq("arr_managed_only")
+      expect(result.items.map { |row| row[:title] }).to contain_exactly("Managed Movie")
+    end
+
     it "treats series-level keep markers as episode blockers" do
       integration = Integration.create!(
         kind: "sonarr",
