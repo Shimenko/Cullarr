@@ -54,6 +54,25 @@ RSpec.describe Sync::RecoverStaleRuns, type: :service do
     expect(sync_run.reload.status).to eq("running")
   end
 
+  it "derives active run ids only from claimed jobs on live processes" do
+    service = described_class.new(correlation_id: "corr-active-query", actor: nil, stale_after: 60.seconds)
+
+    allow(service).to receive_messages(queue_tables_available?: true, active_running_queue_arguments: [
+      { "arguments" => [ 11 ] },
+      { "arguments" => [ 11 ] },
+      { "arguments" => [ 42 ] }
+    ])
+
+    expect(service.send(:active_running_run_ids_from_queue)).to eq([ 11, 42 ])
+  end
+
+  it "returns no active run ids when queue tables are unavailable" do
+    service = described_class.new(correlation_id: "corr-no-queue", actor: nil, stale_after: 60.seconds)
+    allow(service).to receive(:queue_tables_available?).and_return(false)
+
+    expect(service.send(:active_running_run_ids_from_queue)).to eq([])
+  end
+
   it "requeues a replacement run when stale runs were recovered and no queued run exists" do
     stale_run = SyncRun.create!(status: "running", trigger: "manual", started_at: 8.minutes.ago)
     stale_run.touch(time: 5.minutes.ago)

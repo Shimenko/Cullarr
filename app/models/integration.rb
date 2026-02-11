@@ -1,5 +1,9 @@
+require "etc"
+
 class Integration < ApplicationRecord
   COMPATIBILITY_MODES = %w[strict_latest warn_only_read_only].freeze
+  WORKER_COUNT_MAX = 64
+  WORKER_AUTO_SENTINEL = 0
 
   encrypts :api_key_ciphertext
 
@@ -10,7 +14,8 @@ class Integration < ApplicationRecord
     :supported_for_delete,
     :sonarr_fetch_workers,
     :radarr_moviefile_fetch_workers,
-    :tautulli_history_page_size
+    :tautulli_history_page_size,
+    :tautulli_metadata_workers
 
   has_many :arr_tags, dependent: :destroy
   has_many :deletion_actions, dependent: :restrict_with_exception
@@ -45,17 +50,34 @@ class Integration < ApplicationRecord
 
   def sonarr_fetch_workers
     raw_value = settings_json["sonarr_fetch_workers"] || 4
-    raw_value.to_i.clamp(1, 8)
+    raw_value.to_i.clamp(WORKER_AUTO_SENTINEL, WORKER_COUNT_MAX)
+  end
+
+  def sonarr_fetch_workers_resolved
+    resolve_worker_count(sonarr_fetch_workers)
   end
 
   def radarr_moviefile_fetch_workers
     raw_value = settings_json["radarr_moviefile_fetch_workers"] || 4
-    raw_value.to_i.clamp(1, 8)
+    raw_value.to_i.clamp(WORKER_AUTO_SENTINEL, WORKER_COUNT_MAX)
+  end
+
+  def radarr_moviefile_fetch_workers_resolved
+    resolve_worker_count(radarr_moviefile_fetch_workers)
   end
 
   def tautulli_history_page_size
     raw_value = settings_json["tautulli_history_page_size"] || 500
     raw_value.to_i.clamp(50, 5_000)
+  end
+
+  def tautulli_metadata_workers
+    raw_value = settings_json["tautulli_metadata_workers"] || 4
+    raw_value.to_i.clamp(WORKER_AUTO_SENTINEL, WORKER_COUNT_MAX)
+  end
+
+  def tautulli_metadata_workers_resolved
+    resolve_worker_count(tautulli_metadata_workers)
   end
 
   def api_key
@@ -121,9 +143,14 @@ class Integration < ApplicationRecord
         request_timeout_seconds: request_timeout_seconds,
         retry_max_attempts: retry_max_attempts,
         sonarr_fetch_workers: sonarr_fetch_workers,
+        sonarr_fetch_workers_resolved: sonarr_fetch_workers_resolved,
         radarr_moviefile_fetch_workers: radarr_moviefile_fetch_workers,
-        tautulli_history_page_size: tautulli_history_page_size
+        radarr_moviefile_fetch_workers_resolved: radarr_moviefile_fetch_workers_resolved,
+        tautulli_history_page_size: tautulli_history_page_size,
+        tautulli_metadata_workers: tautulli_metadata_workers,
+        tautulli_metadata_workers_resolved: tautulli_metadata_workers_resolved
       },
+      tautulli_history_state: tautulli_history_state_summary,
       path_mappings: path_mappings.order(:from_prefix).map do |mapping|
         {
           id: mapping.id,
@@ -136,6 +163,18 @@ class Integration < ApplicationRecord
   end
 
   private
+
+  def tautulli_history_state_summary
+    return nil unless tautulli?
+
+    state = settings_json["history_sync_state"] || {}
+    {
+      present: state.present?,
+      watermark_id: state["watermark_id"].to_i,
+      max_seen_history_id: state["max_seen_history_id"].to_i,
+      recent_ids_count: Array(state["recent_ids"]).size
+    }
+  end
 
   def normalize_name_and_base_url
     self.name = name.to_s.strip
@@ -150,7 +189,23 @@ class Integration < ApplicationRecord
     settings_json["sonarr_fetch_workers"] = sonarr_fetch_workers
     settings_json["radarr_moviefile_fetch_workers"] = radarr_moviefile_fetch_workers
     settings_json["tautulli_history_page_size"] = tautulli_history_page_size
+    settings_json["tautulli_metadata_workers"] = tautulli_metadata_workers
     self.verify_ssl = true if verify_ssl.nil?
+  end
+
+  def resolve_worker_count(configured_value)
+    return configured_value if configured_value.positive?
+
+    auto_worker_count
+  end
+
+  def auto_worker_count
+    processors = Integer(Etc.nprocessors, exception: false)
+    processors = 2 if processors.nil? || processors <= 0
+
+    [ processors - 1, 1 ].max.clamp(1, WORKER_COUNT_MAX)
+  rescue StandardError
+    1
   end
 
   def validate_base_url_safety

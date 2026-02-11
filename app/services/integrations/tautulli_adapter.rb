@@ -78,13 +78,16 @@ module Integrations
         params: base_api_params.merge(cmd: "get_metadata", rating_key: rating_key)
       )
       data = response_data(payload)
+      guid_external_ids = external_ids_from_guids(
+        Array(data["guids"]) + Array(data["parent_guids"]) + Array(data["grandparent_guids"])
+      )
       {
         duration_ms: data["duration"]&.to_i,
         plex_guid: data["guid"],
         external_ids: {
-          imdb_id: data["imdb_id"],
-          tmdb_id: data["tmdb_id"],
-          tvdb_id: data["tvdb_id"]
+          imdb_id: guid_external_ids[:imdb_id] || data["imdb_id"]&.presence,
+          tmdb_id: guid_external_ids[:tmdb_id] || integer_or_nil(data["tmdb_id"]),
+          tvdb_id: guid_external_ids[:tvdb_id] || integer_or_nil(data["tvdb_id"])
         }.compact
       }
     end
@@ -117,6 +120,11 @@ module Integrations
         tautulli_user_id: ensure_present!(row, :user_id).to_i,
         media_type: media_type,
         plex_rating_key: ensure_present!(row, :rating_key).to_s,
+        plex_guid: row["guid"]&.to_s&.presence,
+        plex_parent_rating_key: row["parent_rating_key"]&.to_s&.presence,
+        plex_grandparent_rating_key: row["grandparent_rating_key"]&.to_s&.presence,
+        season_number: integer_or_nil(row["parent_media_index"]),
+        episode_number: integer_or_nil(row["media_index"]),
         viewed_at: Time.zone.at(ensure_present!(row, :date).to_i),
         play_count: row["play_count"].to_i,
         view_offset_ms: row["view_offset"]&.to_i || 0,
@@ -134,6 +142,48 @@ module Integrations
         "integration response did not include required fields",
         details: { missing_key: "history_identity" }
       )
+    end
+
+    def external_ids_from_guids(guids)
+      ids = {}
+
+      guids.each do |guid|
+        parsed = parse_guid(guid)
+        next if parsed.blank?
+
+        key = parsed.fetch(:kind)
+        ids[key] ||= parsed.fetch(:value)
+      end
+
+      ids
+    end
+
+    def parse_guid(guid)
+      value = guid.to_s.strip
+      return nil if value.blank?
+
+      if (match = value.match(/\Aimdb:\/\/([^?#\/]+)\z/i))
+        return { kind: :imdb_id, value: match[1] }
+      end
+
+      if (match = value.match(/\Atmdb:\/\/([^?#\/]+)\z/i))
+        tmdb_id = integer_or_nil(match[1])
+        return { kind: :tmdb_id, value: tmdb_id } if tmdb_id.present?
+      end
+
+      if (match = value.match(/\Atvdb:\/\/([^?#\/]+)\z/i))
+        tvdb_id = integer_or_nil(match[1])
+        return { kind: :tvdb_id, value: tvdb_id } if tvdb_id.present?
+      end
+
+      nil
+    end
+
+    def integer_or_nil(value)
+      parsed = Integer(value.to_s, exception: false)
+      return nil if parsed.nil? || parsed <= 0
+
+      parsed
     end
   end
 end

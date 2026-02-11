@@ -75,7 +75,8 @@ RSpec.describe "Api::V1::Integrations", type: :request do
                  compatibility_mode: "strict_latest",
                  sonarr_fetch_workers: 7,
                  radarr_moviefile_fetch_workers: 6,
-                 tautulli_history_page_size: 1200
+                 tautulli_history_page_size: 1200,
+                 tautulli_metadata_workers: 9
                }
              }
            },
@@ -87,8 +88,12 @@ RSpec.describe "Api::V1::Integrations", type: :request do
       expect(payload).not_to have_key("api_key")
       expect(payload.fetch("tuning")).to include(
         "sonarr_fetch_workers" => 7,
+        "sonarr_fetch_workers_resolved" => 7,
         "radarr_moviefile_fetch_workers" => 6,
-        "tautulli_history_page_size" => 1200
+        "radarr_moviefile_fetch_workers_resolved" => 6,
+        "tautulli_history_page_size" => 1200,
+        "tautulli_metadata_workers" => 9,
+        "tautulli_metadata_workers_resolved" => 9
       )
     end
 

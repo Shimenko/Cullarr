@@ -3,6 +3,7 @@ module Sync
     ACTIVE_JOB_CLASS_NAME = "Sync::ProcessRunJob".freeze
     RECOVERY_ERROR_CODE = "worker_lost".freeze
     RECOVERY_ERROR_MESSAGE = "Sync worker stopped before completion; run recovered as failed.".freeze
+    ACTIVE_RUN_LOG_SAMPLE_SIZE = 20
 
     Result = Struct.new(:stale_run_ids, :requeued_run_ids, keyword_init: true)
 
@@ -47,27 +48,44 @@ module Sync
       stale_scope = SyncRun
         .where(status: "running")
         .where("updated_at <= ?", stale_after.ago)
+      stale_candidate_ids = stale_scope.order(:id).pluck(:id)
       active_run_ids = active_running_run_ids_from_queue
+      log_recovery_scan(stale_candidate_ids:, active_run_ids:)
       stale_scope = stale_scope.where.not(id: active_run_ids) if active_run_ids.any?
       stale_scope.lock.order(:id).to_a
     end
 
     def active_running_run_ids_from_queue
-      return [] unless queue_jobs_table_available?
+      return [] unless queue_tables_available?
 
-      SolidQueue::Job
-        .where(class_name: ACTIVE_JOB_CLASS_NAME, finished_at: nil)
-        .pluck(:arguments)
+      run_ids = active_running_queue_arguments
         .filter_map { |raw_arguments| extract_run_id(raw_arguments) }
         .uniq
+      log_active_run_ids(run_ids)
+      run_ids
     rescue ActiveRecord::StatementInvalid, NameError
       []
     end
 
-    def queue_jobs_table_available?
-      SolidQueue::Job.connection.data_source_exists?(SolidQueue::Job.table_name)
+    def queue_tables_available?
+      [ SolidQueue::Job, SolidQueue::ClaimedExecution, SolidQueue::Process ].all? do |table_class|
+        table_class.connection.data_source_exists?(table_class.table_name)
+      end
     rescue ActiveRecord::ActiveRecordError, NameError
       false
+    end
+
+    def process_alive_cutoff
+      process_alive_threshold = SolidQueue.respond_to?(:process_alive_threshold) ? SolidQueue.process_alive_threshold : 5.minutes
+      [ process_alive_threshold.to_i, 1 ].max.seconds.ago
+    end
+
+    def active_running_queue_arguments
+      SolidQueue::Job
+        .joins(claimed_execution: :process)
+        .where(class_name: ACTIVE_JOB_CLASS_NAME, finished_at: nil)
+        .where("#{SolidQueue::Process.table_name}.last_heartbeat_at > ?", process_alive_cutoff)
+        .pluck(:arguments)
     end
 
     def extract_run_id(raw_arguments)
@@ -158,6 +176,38 @@ module Sync
           "correlation_id=#{correlation_id}"
         ].join(" ")
       )
+    end
+
+    def log_recovery_scan(stale_candidate_ids:, active_run_ids:)
+      return if stale_candidate_ids.empty? && active_run_ids.empty?
+
+      Rails.logger.info(
+        [
+          "sync_run_recovery_scan",
+          "stale_candidates=#{stale_candidate_ids.size}",
+          "stale_candidate_ids=#{sample_ids(stale_candidate_ids)}",
+          "active_from_queue=#{active_run_ids.size}",
+          "active_run_ids=#{sample_ids(active_run_ids)}",
+          "correlation_id=#{correlation_id}"
+        ].join(" ")
+      )
+    end
+
+    def log_active_run_ids(run_ids)
+      return if run_ids.empty?
+
+      Rails.logger.info(
+        [
+          "sync_run_recovery_active_queue_runs",
+          "count=#{run_ids.size}",
+          "run_ids=#{sample_ids(run_ids)}",
+          "correlation_id=#{correlation_id}"
+        ].join(" ")
+      )
+    end
+
+    def sample_ids(ids)
+      ids.first(ACTIVE_RUN_LOG_SAMPLE_SIZE).join(",")
     end
   end
 end

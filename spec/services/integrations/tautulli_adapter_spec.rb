@@ -67,6 +67,41 @@ RSpec.describe Integrations::TautulliAdapter, type: :service do
     stubs.verify_stubbed_calls
   end
 
+  it "extracts external ids from guids when top-level metadata ids are absent" do
+    payload = {
+      response: {
+        result: "success",
+        data: {
+          duration: 4_359_000,
+          guid: "plex://episode/5fbe1bb5dcbaf9002f9ddf63",
+          imdb_id: nil,
+          tmdb_id: nil,
+          tvdb_id: nil,
+          guids: [ "imdb://tt5109276", "tmdb://1132654", "tvdb://5343660" ]
+        }
+      }
+    }.to_json
+
+    stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+      stub.get("api/v2") do |env|
+        expect(env.params["cmd"]).to eq("get_metadata")
+        expect(env.params["rating_key"]).to eq("1290")
+        [ 200, {}, payload ]
+      end
+    end
+    adapter = described_class.new(integration:, connection: test_connection(stubs))
+
+    metadata = adapter.fetch_metadata(rating_key: "1290")
+
+    expect(metadata).to include(duration_ms: 4_359_000, plex_guid: "plex://episode/5fbe1bb5dcbaf9002f9ddf63")
+    expect(metadata.fetch(:external_ids)).to include(
+      imdb_id: "tt5109276",
+      tmdb_id: 1_132_654,
+      tvdb_id: 5_343_660
+    )
+    stubs.verify_stubbed_calls
+  end
+
   it "skips unsupported history media types" do
     bad_payload = {
       response: {

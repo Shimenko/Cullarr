@@ -326,8 +326,9 @@
           label: "Sonarr Fetch Workers",
           value: 4,
           type: :number,
-          min: 1,
-          max: 8,
+          min: 0,
+          max: 64,
+          help_text: "Set 0 for auto (CPU cores - 1, capped at 64).",
           autocomplete: "off",
           disabled: default_integration_kind != "sonarr"
         ) %>
@@ -345,8 +346,9 @@
           label: "Radarr MovieFile Workers",
           value: 4,
           type: :number,
-          min: 1,
-          max: 8,
+          min: 0,
+          max: 64,
+          help_text: "Set 0 for auto (CPU cores - 1, capped at 64).",
           autocomplete: "off",
           disabled: default_integration_kind != "radarr"
         ) %>
@@ -366,6 +368,17 @@
           type: :number,
           min: 50,
           max: 5000,
+          autocomplete: "off",
+          disabled: default_integration_kind != "tautulli"
+        ) %>
+        <%= render Ui::InputComponent.new(
+          name: "integration[settings][tautulli_metadata_workers]",
+          label: "Tautulli Metadata Workers",
+          value: 4,
+          type: :number,
+          min: 0,
+          max: 64,
+          help_text: "Set 0 for auto (CPU cores - 1, capped at 64).",
           autocomplete: "off",
           disabled: default_integration_kind != "tautulli"
         ) %>
@@ -446,8 +459,9 @@
                 label: "Sonarr Fetch Workers",
                 value: integration.sonarr_fetch_workers,
                 type: :number,
-                min: 1,
-                max: 8,
+                min: 0,
+                max: 64,
+                help_text: "Set 0 for auto (CPU cores - 1, capped at 64).",
                 autocomplete: "off"
               ) %>
             <% end %>
@@ -458,8 +472,9 @@
                 label: "Radarr MovieFile Workers",
                 value: integration.radarr_moviefile_fetch_workers,
                 type: :number,
-                min: 1,
-                max: 8,
+                min: 0,
+                max: 64,
+                help_text: "Set 0 for auto (CPU cores - 1, capped at 64).",
                 autocomplete: "off"
               ) %>
             <% end %>
@@ -472,6 +487,16 @@
                 type: :number,
                 min: 50,
                 max: 5000,
+                autocomplete: "off"
+              ) %>
+              <%= render Ui::InputComponent.new(
+                name: "integration[settings][tautulli_metadata_workers]",
+                label: "Tautulli Metadata Workers",
+                value: integration.tautulli_metadata_workers,
+                type: :number,
+                min: 0,
+                max: 64,
+                help_text: "Set 0 for auto (CPU cores - 1, capped at 64).",
                 autocomplete: "off"
               ) %>
             <% end %>

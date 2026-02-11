@@ -21,27 +21,20 @@ module Sync
         Integrations::HealthCheck.new(integration, raise_on_unsupported: true).call
         counts[:integrations] += 1
 
-        adapter = Integrations::TautulliAdapter.new(integration:)
         watchables = watchables_needing_metadata
+        worker_count = integration.tautulli_metadata_workers_resolved
         phase_progress&.add_total!(watchables.size)
+        counts[:metadata_requested] += watchables.size
 
-        watchables.each do |watchable|
-          counts[:metadata_requested] += 1
-
-          begin
-            metadata = adapter.fetch_metadata(rating_key: watchable.plex_rating_key)
-          rescue Integrations::ContractMismatchError
-            counts[:metadata_skipped] += 1
-            phase_progress&.advance!(1)
-            next
-          end
-
-          counts[:watchables_updated] += 1 if apply_metadata!(watchable, metadata)
+        process_watchables_concurrently(integration:, watchables:, worker_count:) do |result|
+          counts[:metadata_skipped] += 1 if result.fetch(:skipped)
+          counts[:watchables_updated] += 1 if result.fetch(:updated)
           phase_progress&.advance!(1)
         end
 
         log_info(
           "sync_phase_worker_integration_complete phase=tautulli_metadata integration_id=#{integration.id} " \
+          "metadata_workers=#{worker_count} " \
           "metadata_requested=#{counts[:metadata_requested]} watchables_updated=#{counts[:watchables_updated]} " \
           "metadata_skipped=#{counts[:metadata_skipped]}"
         )
@@ -54,6 +47,47 @@ module Sync
     private
 
     attr_reader :correlation_id, :phase_progress, :sync_run
+
+    def process_watchables_concurrently(integration:, watchables:, worker_count:)
+      return if watchables.empty?
+
+      work_queue = Queue.new
+      result_queue = Queue.new
+      watchables.each { |watchable| work_queue << watchable }
+
+      worker_count = [ worker_count, watchables.size ].min
+      worker_count = 1 if worker_count <= 0
+      worker_count.times { work_queue << nil }
+
+      threads = Array.new(worker_count) do
+        Thread.new do
+          thread_adapter = Integrations::TautulliAdapter.new(integration:)
+          loop do
+            watchable = work_queue.pop
+            break if watchable.nil?
+
+            begin
+              metadata = thread_adapter.fetch_metadata(rating_key: watchable.plex_rating_key)
+              result_queue << { watchable: watchable, metadata: metadata }
+            rescue Integrations::ContractMismatchError
+              result_queue << { skipped: true }
+            end
+          end
+        end
+      end
+
+      watchables.size.times do
+        result = result_queue.pop
+        if result[:watchable].present?
+          updated = apply_metadata!(result.fetch(:watchable), result.fetch(:metadata))
+          yield({ skipped: false, updated: updated })
+        else
+          yield({ skipped: true, updated: false })
+        end
+      end
+    ensure
+      threads&.each(&:join)
+    end
 
     def watchables_needing_metadata
       movie_scope = Movie.where.not(plex_rating_key: [ nil, "" ])

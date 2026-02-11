@@ -36,9 +36,9 @@ RSpec.describe "Settings", type: :request do
     expect(form).to be_present
     expect(form.at_css("[data-integration-kind-tuners-target='kindField'] select[name='integration[kind]']")).to be_present
     expect(integration_create_group_fields(form)).to eq(
-      "sonarr" => "integration[settings][sonarr_fetch_workers]",
-      "radarr" => "integration[settings][radarr_moviefile_fetch_workers]",
-      "tautulli" => "integration[settings][tautulli_history_page_size]"
+      "sonarr" => [ "integration[settings][sonarr_fetch_workers]" ],
+      "radarr" => [ "integration[settings][radarr_moviefile_fetch_workers]" ],
+      "tautulli" => [ "integration[settings][tautulli_history_page_size]", "integration[settings][tautulli_metadata_workers]" ]
     )
   end
 
@@ -67,7 +67,7 @@ RSpec.describe "Settings", type: :request do
 
   def integration_create_group_fields(form)
     form.css("[data-integration-kind-tuners-target='group'][data-kind]").to_h do |group|
-      [ group["data-kind"], group.at_css("input")&.[]("name") ]
+      [ group["data-kind"], group.css("input").map { |input| input["name"] } ]
     end
   end
 end

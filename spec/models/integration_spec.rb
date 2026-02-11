@@ -2,7 +2,7 @@ require "rails_helper"
 require "base64"
 require "securerandom"
 
-# rubocop:disable RSpec/ExampleLength
+# rubocop:disable RSpec/ExampleLength, RSpec/MultipleExpectations
 RSpec.describe Integration, type: :model do
   def random_encryption_key
     Base64.strict_encode64(SecureRandom.random_bytes(32))
@@ -61,8 +61,12 @@ RSpec.describe Integration, type: :model do
       request_timeout_seconds: 15,
       retry_max_attempts: 5,
       sonarr_fetch_workers: 4,
+      sonarr_fetch_workers_resolved: 4,
       radarr_moviefile_fetch_workers: 4,
-      tautulli_history_page_size: 500
+      radarr_moviefile_fetch_workers_resolved: 4,
+      tautulli_history_page_size: 500,
+      tautulli_metadata_workers: 4,
+      tautulli_metadata_workers_resolved: 4
     )
     expect(payload).not_to have_key(:api_key)
   end
@@ -79,15 +83,41 @@ RSpec.describe Integration, type: :model do
         "retry_max_attempts" => 0,
         "sonarr_fetch_workers" => 99,
         "radarr_moviefile_fetch_workers" => -5,
-        "tautulli_history_page_size" => 9_999
+        "tautulli_history_page_size" => 9_999,
+        "tautulli_metadata_workers" => 999
       }
     )
 
     expect(integration.request_timeout_seconds).to eq(120)
     expect(integration.retry_max_attempts).to eq(1)
-    expect(integration.sonarr_fetch_workers).to eq(8)
-    expect(integration.radarr_moviefile_fetch_workers).to eq(1)
+    expect(integration.sonarr_fetch_workers).to eq(64)
+    expect(integration.radarr_moviefile_fetch_workers).to eq(0)
     expect(integration.tautulli_history_page_size).to eq(5000)
+    expect(integration.tautulli_metadata_workers).to eq(64)
+  end
+
+  it "supports auto worker mode when worker setting is zero" do
+    allow(Etc).to receive(:nprocessors).and_return(24)
+
+    integration = described_class.create!(
+      kind: "tautulli",
+      name: "Tautulli Auto Workers",
+      base_url: "https://tautulli.auto.local",
+      api_key: "secret-key",
+      verify_ssl: true,
+      settings_json: {
+        "sonarr_fetch_workers" => 0,
+        "radarr_moviefile_fetch_workers" => 0,
+        "tautulli_metadata_workers" => 0
+      }
+    )
+
+    expect(integration.sonarr_fetch_workers).to eq(0)
+    expect(integration.radarr_moviefile_fetch_workers).to eq(0)
+    expect(integration.tautulli_metadata_workers).to eq(0)
+    expect(integration.sonarr_fetch_workers_resolved).to eq(23)
+    expect(integration.radarr_moviefile_fetch_workers_resolved).to eq(23)
+    expect(integration.tautulli_metadata_workers_resolved).to eq(23)
   end
 
   it "stores api key encrypted at rest" do
@@ -130,4 +160,4 @@ RSpec.describe Integration, type: :model do
     ActiveRecord::Encryption.config.primary_key = original_primary_keys
   end
 end
-# rubocop:enable RSpec/ExampleLength
+# rubocop:enable RSpec/ExampleLength, RSpec/MultipleExpectations

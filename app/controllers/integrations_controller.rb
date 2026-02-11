@@ -130,6 +130,7 @@ class IntegrationsController < ApplicationController
           sonarr_fetch_workers
           radarr_moviefile_fetch_workers
           tautulli_history_page_size
+          tautulli_metadata_workers
         ]
       )
     end

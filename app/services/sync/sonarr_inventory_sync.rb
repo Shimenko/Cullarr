@@ -26,7 +26,7 @@ module Sync
 
         adapter = Integrations::SonarrAdapter.new(integration:)
         mapper = CanonicalPathMapper.new(integration:)
-        worker_count = integration.sonarr_fetch_workers
+        worker_count = integration.sonarr_fetch_workers_resolved
 
         series_rows = adapter.fetch_series
         estimated_episode_rows = series_rows.sum { |series_row| series_row.dig(:statistics, :total_episode_count).to_i }

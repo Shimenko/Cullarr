@@ -137,12 +137,13 @@ RSpec.describe Sync::TautulliHistorySync, type: :service do
       rows_invalid: 0,
       rows_ambiguous: 1,
       rows_skipped: 0,
-      watch_stats_upserted: 0
+      watch_stats_upserted: 0,
+      history_state_updates: 0,
+      history_state_skipped: 1,
+      degraded_zero_processed: 1
     )
     expect(WatchStat.where(plex_user: plex_user)).to be_empty
-    state = tautulli_integration.reload.settings_json.fetch("history_sync_state")
-    expect(state.fetch("watermark_id")).to eq(0)
-    expect(state.fetch("max_seen_history_id")).to eq(5001)
+    expect(tautulli_integration.reload.settings_json).not_to have_key("history_sync_state")
   end
 
   it "continues processing when a page includes invalid rows" do
@@ -447,6 +448,92 @@ RSpec.describe Sync::TautulliHistorySync, type: :service do
     expect(WatchStat.where(plex_user:, watchable: movie).count).to eq(1)
   end
 
+  it "resolves episode mappings by series metadata before episode-level metadata fallback" do
+    tautulli_integration = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Episode Series Mapping",
+      base_url: "https://tautulli.episode-series.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: {
+        "tautulli_history_page_size" => 200,
+        "tautulli_metadata_workers" => 1
+      }
+    )
+    plex_user = PlexUser.create!(tautulli_user_id: 199, friendly_name: "Hank", is_hidden: false)
+    sonarr_integration = Integration.create!(
+      kind: "sonarr",
+      name: "Sonarr Episode Series Mapping",
+      base_url: "https://sonarr.episode-series.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    series = Series.create!(
+      integration: sonarr_integration,
+      sonarr_series_id: 3_301,
+      title: "Series Match",
+      tvdb_id: 3_301
+    )
+    season = Season.create!(series: series, season_number: 2)
+    episode = Episode.create!(
+      integration: sonarr_integration,
+      season: season,
+      sonarr_episode_id: 33_012,
+      episode_number: 5,
+      title: "Needs Episode Mapping",
+      plex_rating_key: nil
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).and_return(health_check)
+
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli_integration).and_return(adapter)
+    allow(adapter).to receive(:fetch_history_page).with(
+      start: 0,
+      length: 200,
+      order_column: "id",
+      order_dir: "desc"
+    ).and_return(
+      {
+        rows: [
+          {
+            history_id: 13_301,
+            tautulli_user_id: plex_user.tautulli_user_id,
+            media_type: "episode",
+            plex_rating_key: "plex-episode-33012",
+            plex_grandparent_rating_key: "plex-show-3301",
+            season_number: 2,
+            episode_number: 5,
+            viewed_at: Time.zone.parse("2026-02-11 11:30:00"),
+            play_count: 1,
+            view_offset_ms: 1_100_000,
+            duration_ms: 1_300_000
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        has_more: false,
+        next_start: 1
+      }
+    )
+    allow(adapter).to receive(:fetch_metadata) do |rating_key:|
+      raise "unexpected episode-level metadata lookup for #{rating_key}" unless rating_key == "plex-show-3301"
+
+      {
+        duration_ms: nil,
+        plex_guid: "plex://show/3301",
+        external_ids: { tvdb_id: 3_301 }
+      }
+    end
+
+    result = described_class.new(sync_run:, correlation_id: "corr-episode-series-reconcile").call
+
+    expect(result).to include(rows_processed: 1, watch_stats_upserted: 1, metadata_lookup_attempted: 1)
+    expect(episode.reload.plex_rating_key).to eq("plex-episode-33012")
+    expect(WatchStat.where(plex_user:, watchable: episode).count).to eq(1)
+  end
+
   it "rescans from a reset watermark when stored history state is stale" do
     tautulli_integration = Integration.create!(
       kind: "tautulli",
@@ -530,6 +617,131 @@ RSpec.describe Sync::TautulliHistorySync, type: :service do
     state = tautulli_integration.reload.settings_json.fetch("history_sync_state")
     expect(state.fetch("watermark_id")).to eq(12)
     expect(state.fetch("max_seen_history_id")).to eq(12)
+  end
+
+  it "does not advance scan horizon when no rows are persisted from fetched history" do
+    tautulli_integration = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Preserve Horizon",
+      base_url: "https://tautulli.horizon.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: {
+        "tautulli_history_page_size" => 200,
+        "history_sync_state" => { "watermark_id" => 25, "max_seen_history_id" => 99, "recent_ids" => [] }
+      }
+    )
+    plex_user = PlexUser.create!(tautulli_user_id: 155, friendly_name: "Horizon User", is_hidden: false)
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).and_return(health_check)
+
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli_integration).and_return(adapter)
+    allow(adapter).to receive(:fetch_metadata).and_raise(Integrations::ContractMismatchError, "metadata unavailable")
+    allow(adapter).to receive(:fetch_history_page).with(
+      start: 0,
+      length: 200,
+      order_column: "id",
+      order_dir: "desc"
+    ).and_return(
+      {
+        rows: [
+          {
+            history_id: 2_001,
+            tautulli_user_id: plex_user.tautulli_user_id,
+            media_type: "movie",
+            plex_rating_key: "unknown-rating-key",
+            viewed_at: Time.zone.parse("2026-02-11 12:00:00"),
+            play_count: 1,
+            view_offset_ms: 700_000,
+            duration_ms: 1_000_000
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        has_more: false,
+        next_start: 1
+      }
+    )
+
+    result = described_class.new(sync_run:, correlation_id: "corr-preserve-horizon").call
+
+    expect(result).to include(
+      rows_fetched: 1,
+      rows_processed: 0,
+      rows_skipped_missing_watchable: 1,
+      history_state_updates: 0,
+      history_state_skipped: 1,
+      degraded_zero_processed: 1
+    )
+    state = tautulli_integration.reload.settings_json.fetch("history_sync_state")
+    expect(state).to include("watermark_id" => 25, "max_seen_history_id" => 99)
+  end
+
+  it "streams progress during metadata reconciliation and row evaluation" do
+    tautulli_integration = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Progress Streaming",
+      base_url: "https://tautulli.progress.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: { "tautulli_history_page_size" => 200 }
+    )
+    plex_user = PlexUser.create!(tautulli_user_id: 166, friendly_name: "Progress User", is_hidden: false)
+    progress_events = []
+    phase_progress = instance_double(Sync::ProgressTracker)
+    allow(phase_progress).to receive(:add_total!) { |count| progress_events << [ :add_total, count ] }
+    allow(phase_progress).to receive(:advance!) { |count| progress_events << [ :advance, count ] }
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).and_return(health_check)
+
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli_integration).and_return(adapter)
+    allow(adapter).to receive(:fetch_history_page).with(
+      start: 0,
+      length: 200,
+      order_column: "id",
+      order_dir: "desc"
+    ).and_return(
+      {
+        rows: [
+          {
+            history_id: 30_001,
+            tautulli_user_id: plex_user.tautulli_user_id,
+            media_type: "movie",
+            plex_rating_key: "unmapped-rating-key",
+            viewed_at: Time.zone.parse("2026-02-11 12:00:00"),
+            play_count: 1,
+            view_offset_ms: 750_000,
+            duration_ms: 1_000_000
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        has_more: false,
+        next_start: 1
+      }
+    )
+    allow(adapter).to receive(:fetch_metadata).with(rating_key: "unmapped-rating-key").and_return(
+      {
+        duration_ms: 1_000_000,
+        plex_guid: "plex://movie/30001",
+        external_ids: {}
+      }
+    )
+
+    result = described_class.new(sync_run:, correlation_id: "corr-progress-stream", phase_progress: phase_progress).call
+
+    expect(result).to include(
+      rows_fetched: 1,
+      rows_processed: 0,
+      rows_skipped_missing_watchable: 1,
+      metadata_lookup_attempted: 1
+    )
+    expect(progress_events).to include([ :add_total, 2 ], [ :add_total, 1 ])
+    expect(progress_events.count { |event| event == [ :advance, 1 ] }).to be >= 3
   end
 end
 # rubocop:enable RSpec/ExampleLength

@@ -22,7 +22,7 @@ module Sync
 
         adapter = Integrations::RadarrAdapter.new(integration:)
         mapper = CanonicalPathMapper.new(integration:)
-        worker_count = integration.radarr_moviefile_fetch_workers
+        worker_count = integration.radarr_moviefile_fetch_workers_resolved
 
         movies = fetch_movies(adapter:)
         phase_progress&.add_total!(movies.size)
