@@ -48,6 +48,7 @@ RSpec.describe Candidates::Query, type: :service do
         saved_view_id: saved_view.id,
         plex_user_ids: nil,
         include_blocked: false,
+        watched_match_mode: "all",
         cursor: nil,
         limit: nil
       ).call
@@ -70,6 +71,149 @@ RSpec.describe Candidates::Query, type: :service do
       end.to raise_error(described_class::InvalidFilterError) { |error|
         expect(error.fields).to eq({ "include_blocked" => [ "must be true or false" ] })
       }
+    end
+
+    it "rejects invalid watched_match_mode values" do
+      expect do
+        described_class.new(
+          scope: "movie",
+          saved_view_id: nil,
+          plex_user_ids: nil,
+          include_blocked: false,
+          watched_match_mode: "sometimes",
+          cursor: nil,
+          limit: nil
+        ).call
+      end.to raise_error(described_class::InvalidFilterError) { |error|
+        expect(error.fields).to eq({ "watched_match_mode" => [ "must be one of: all, any, none" ] })
+      }
+    end
+
+    it "supports watched_match_mode=any and returns diagnostics for strict filtering" do
+      integration = create_integration!(name: "Radarr Match Mode", host: "match-mode")
+      movie = Movie.create!(
+        integration: integration,
+        radarr_movie_id: 333,
+        title: "Match Mode Movie",
+        duration_ms: 100_000
+      )
+      MediaFile.create!(
+        attachable: movie,
+        integration: integration,
+        arr_file_id: 334,
+        path: "/media/movies/match-mode.mkv",
+        path_canonical: "/media/movies/match-mode.mkv",
+        size_bytes: 1.gigabyte
+      )
+      watched_user = PlexUser.create!(tautulli_user_id: 2233, friendly_name: "Watched", is_hidden: false)
+      unwatched_user = PlexUser.create!(tautulli_user_id: 2234, friendly_name: "Unwatched", is_hidden: false)
+      WatchStat.create!(plex_user: watched_user, watchable: movie, play_count: 1)
+      WatchStat.create!(plex_user: unwatched_user, watchable: movie, play_count: 0)
+
+      strict_result = described_class.new(
+        scope: "movie",
+        plex_user_ids: [ watched_user.id, unwatched_user.id ],
+        include_blocked: false,
+        watched_match_mode: "all",
+        cursor: nil,
+        limit: nil
+      ).call
+      any_result = described_class.new(
+        scope: "movie",
+        plex_user_ids: [ watched_user.id, unwatched_user.id ],
+        include_blocked: false,
+        watched_match_mode: "any",
+        cursor: nil,
+        limit: nil
+      ).call
+
+      expect(strict_result.items).to eq([])
+      expect(strict_result.diagnostics).to include(
+        watched_match_mode: "all",
+        watched_prefilter_applied: true,
+        rows_scanned: 0,
+        rows_filtered_unwatched: 0,
+        rows_returned: 0
+      )
+      expect(any_result.filters).to include(watched_match_mode: "any")
+      expect(any_result.items.map { |row| row[:candidate_id] }).to contain_exactly("movie:#{movie.id}")
+      expect(any_result.diagnostics).to include(
+        watched_match_mode: "any",
+        watched_prefilter_applied: true,
+        rows_scanned: 1,
+        rows_filtered_unwatched: 0,
+        rows_returned: 1
+      )
+    end
+
+    it "keeps default plex user selection empty while evaluating watched filters against all users" do
+      integration = create_integration!(name: "Radarr Default Users", host: "default-users")
+      movie = Movie.create!(
+        integration: integration,
+        radarr_movie_id: 1_111,
+        title: "Default User Filter Movie",
+        duration_ms: 100_000
+      )
+      MediaFile.create!(
+        attachable: movie,
+        integration: integration,
+        arr_file_id: 1_112,
+        path: "/media/movies/default-users.mkv",
+        path_canonical: "/media/movies/default-users.mkv",
+        size_bytes: 1.gigabyte
+      )
+      watched_user = PlexUser.create!(tautulli_user_id: 711, friendly_name: "Default Watched", is_hidden: false)
+      unwatched_user = PlexUser.create!(tautulli_user_id: 712, friendly_name: "Default Unwatched", is_hidden: false)
+      WatchStat.create!(plex_user: watched_user, watchable: movie, play_count: 1)
+      WatchStat.create!(plex_user: unwatched_user, watchable: movie, play_count: 0)
+
+      result = described_class.new(
+        scope: "movie",
+        plex_user_ids: nil,
+        include_blocked: false,
+        watched_match_mode: "none",
+        cursor: nil,
+        limit: nil
+      ).call
+
+      expect(result.filters[:plex_user_ids]).to eq([])
+      expect(result.filters[:watched_match_mode]).to eq("none")
+      expect(result.diagnostics).to include(selected_user_count: 0, effective_selected_user_count: 2)
+      expect(result.items).to eq([])
+    end
+
+    it "treats rollups with no eligible episode snapshots as unwatched for none mode" do
+      user = PlexUser.create!(tautulli_user_id: 3001, friendly_name: "Rollup User", is_hidden: false)
+      integration = Integration.create!(
+        kind: "sonarr",
+        name: "Sonarr Rollup Empty",
+        base_url: "https://sonarr.rollup-empty.local",
+        api_key: "secret",
+        verify_ssl: true
+      )
+      series = Series.create!(integration:, sonarr_series_id: 31_001, title: "Rollup Empty Show")
+      season = Season.create!(series:, season_number: 1)
+      episode = Episode.create!(
+        integration: integration,
+        season: season,
+        sonarr_episode_id: 31_101,
+        episode_number: 1,
+        duration_ms: 100_000
+      )
+      WatchStat.create!(plex_user: user, watchable: episode, play_count: 1)
+
+      result = described_class.new(
+        scope: "tv_season",
+        plex_user_ids: [ user.id ],
+        include_blocked: true,
+        watched_match_mode: "none",
+        cursor: nil,
+        limit: nil
+      ).call
+
+      expect(result.items.map { |row| row[:id] }).to contain_exactly("season:#{season.id}")
+      expect(result.items.first.dig(:watched_summary, :watched_user_count)).to eq(0)
+      expect(result.items.first.dig(:watched_summary, :all_selected_users_watched)).to be(false)
     end
 
     it "uses percent watched mode when duration is present" do
@@ -103,6 +247,7 @@ RSpec.describe Candidates::Query, type: :service do
         scope: "movie",
         plex_user_ids: [ user.id ],
         include_blocked: false,
+        watched_match_mode: "all",
         cursor: nil,
         limit: nil
       ).call
@@ -142,6 +287,7 @@ RSpec.describe Candidates::Query, type: :service do
         scope: "movie",
         plex_user_ids: [ user.id ],
         include_blocked: false,
+        watched_match_mode: "all",
         cursor: nil,
         limit: nil
       ).call
@@ -194,6 +340,7 @@ RSpec.describe Candidates::Query, type: :service do
         scope: "movie",
         plex_user_ids: [ user.id ],
         include_blocked: true,
+        watched_match_mode: "all",
         cursor: nil,
         limit: 10
       )
@@ -262,6 +409,7 @@ RSpec.describe Candidates::Query, type: :service do
         scope: "tv_episode",
         plex_user_ids: [ user.id ],
         include_blocked: true,
+        watched_match_mode: "all",
         cursor: nil,
         limit: 10
       )
@@ -308,6 +456,7 @@ RSpec.describe Candidates::Query, type: :service do
           scope: "movie",
           plex_user_ids: [ user.id ],
           include_blocked: true,
+          watched_match_mode: "all",
           cursor: nil,
           limit: 10
         ).call
@@ -351,6 +500,7 @@ RSpec.describe Candidates::Query, type: :service do
         scope: "movie",
         plex_user_ids: [ user.id ],
         include_blocked: true,
+        watched_match_mode: "all",
         cursor: nil,
         limit: nil
       ).call
@@ -395,6 +545,7 @@ RSpec.describe Candidates::Query, type: :service do
         scope: "tv_episode",
         plex_user_ids: [ user.id ],
         include_blocked: true,
+        watched_match_mode: "all",
         cursor: nil,
         limit: nil
       ).call
@@ -453,6 +604,7 @@ RSpec.describe Candidates::Query, type: :service do
         scope: "tv_season",
         plex_user_ids: [ user.id ],
         include_blocked: true,
+        watched_match_mode: "all",
         cursor: nil,
         limit: nil
       ).call

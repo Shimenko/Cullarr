@@ -26,7 +26,8 @@ RSpec.describe "Candidates", type: :request do
       expect(response).to have_http_status(:ok)
       expect(response.body).to include("Candidates")
       expect(response.body).to include("Include blocked candidates")
-      expect(response.body).to include("Plex users (defaults to all)")
+      expect(response.body).to include("Watched Match")
+      expect(response.body).to include("Plex users (leave blank to use all users for watched matching)")
     end
   end
 end

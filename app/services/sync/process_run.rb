@@ -6,7 +6,12 @@ module Sync
     end
 
     def call
-      return sync_run unless transition_to_running!
+      unless transition_to_running!
+        record_run_skipped_event
+        log_run_skipped!
+        RunProgressBroadcaster.broadcast(sync_run: sync_run, correlation_id: correlation_id)
+        return sync_run
+      end
 
       run_started_at = Time.current
       log_run_started!
@@ -128,6 +133,18 @@ module Sync
       )
     end
 
+    def record_run_skipped_event
+      record_event(
+        "cullarr.sync.run_skipped",
+        {
+          sync_run_id: sync_run.id,
+          trigger: sync_run.trigger,
+          status: sync_run.status,
+          reason: "not_queued"
+        }
+      )
+    end
+
     def record_run_queued_event(sync_run_record, queued_from_sync_run_id:)
       record_event(
         "cullarr.sync.run_queued",
@@ -171,6 +188,18 @@ module Sync
       Rails.logger.info(
         [
           "sync_run_started",
+          "sync_run_id=#{sync_run.id}",
+          "trigger=#{sync_run.trigger}",
+          "status=#{sync_run.status}",
+          "correlation_id=#{correlation_id}"
+        ].join(" ")
+      )
+    end
+
+    def log_run_skipped!
+      Rails.logger.warn(
+        [
+          "sync_run_skipped",
           "sync_run_id=#{sync_run.id}",
           "trigger=#{sync_run.trigger}",
           "status=#{sync_run.status}",

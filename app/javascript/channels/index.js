@@ -1,2 +1,1 @@
-// Import all the channels to be used by Action Cable
-import "channels/runs_channel"
+// Action Cable channel subscriptions are initialized by page-specific controllers.

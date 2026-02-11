@@ -9,6 +9,8 @@ module Sync
     end
 
     def call
+      recover_stale_runs!
+
       sync_run_to_enqueue = nil
       result = nil
 
@@ -39,6 +41,14 @@ module Sync
     private
 
     attr_reader :actor, :correlation_id, :trigger
+
+    def recover_stale_runs!
+      Sync::RecoverStaleRuns.new(
+        correlation_id: correlation_id,
+        actor: actor,
+        enqueue_replacement: false
+      ).call
+    end
 
     def handle_running_run(running_run, queued_run)
       return Result.new(state: :conflict, sync_run: running_run) if running_run.queued_next? || queued_run.present?

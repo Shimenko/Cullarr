@@ -21,6 +21,7 @@ Rails.application.routes.draw do
 
   resources :integrations, only: %i[create update destroy] do
     post :check, on: :member
+    post :reset_history_state, on: :member
     resources :path_mappings, only: %i[create update destroy]
   end
 
@@ -38,6 +39,7 @@ Rails.application.routes.draw do
         resource :settings, only: %i[show update]
         resources :integrations, only: %i[index create update destroy] do
           post :check, on: :member
+          post :reset_history_state, on: :member
           resources :path_mappings, only: %i[index create update destroy], controller: :path_mappings
         end
         resources :path_exclusions, only: %i[index create update destroy]

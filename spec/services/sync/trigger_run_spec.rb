@@ -1,9 +1,17 @@
 require "rails_helper"
 
 RSpec.describe Sync::TriggerRun, type: :service do
+  let(:recovery_service) do
+    instance_double(
+      Sync::RecoverStaleRuns,
+      call: Sync::RecoverStaleRuns::Result.new(stale_run_ids: [], requeued_run_ids: [])
+    )
+  end
+
   before do
     allow(Sync::RunProgressBroadcaster).to receive(:broadcast)
     allow(Sync::ProcessRunJob).to receive(:perform_later)
+    allow(Sync::RecoverStaleRuns).to receive(:new).and_return(recovery_service)
   end
 
   after do
@@ -36,6 +44,20 @@ RSpec.describe Sync::TriggerRun, type: :service do
 
     expect(states).to all(eq(:conflict))
     expect(SyncRun.where(status: "queued").count).to eq(1)
+  end
+
+  it "recovers stale runs before queueing a new run" do
+    described_class.new(
+      trigger: "manual",
+      correlation_id: "corr-recovery",
+      actor: nil
+    ).call
+
+    expect(Sync::RecoverStaleRuns).to have_received(:new).with(
+      correlation_id: "corr-recovery",
+      actor: nil,
+      enqueue_replacement: false
+    )
   end
 
   def run_concurrent_triggers(burst_size:, trigger:, correlation_id_prefix:)

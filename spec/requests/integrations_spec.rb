@@ -13,6 +13,10 @@ RSpec.describe "Integrations", type: :request do
     operator
   end
 
+  def reauthenticate!
+    post "/security/re_authenticate", params: { password: "password123" }
+  end
+
   describe "POST /integrations/:id/check" do
     it "records health_checked event for healthy status" do
       sign_in_operator!
@@ -66,6 +70,49 @@ RSpec.describe "Integrations", type: :request do
 
       expect(response).to redirect_to("/settings")
       expect(AuditEvent.order(:created_at).last.event_name).to eq("cullarr.integration.compatibility_blocked")
+    end
+  end
+
+  describe "POST /integrations/:id/reset_history_state" do
+    it "clears tautulli history sync state" do
+      sign_in_operator!
+      reauthenticate!
+      integration = Integration.create!(
+        kind: "tautulli",
+        name: "Tautulli Main",
+        base_url: "https://tautulli.local",
+        api_key: "secret",
+        verify_ssl: true,
+        settings_json: {
+          "history_sync_state" => {
+            "watermark_id" => 123,
+            "recent_ids" => [ 123 ]
+          }
+        }
+      )
+
+      post "/integrations/#{integration.id}/reset_history_state"
+
+      expect(response).to redirect_to("/settings")
+      expect(integration.reload.settings_json).not_to have_key("history_sync_state")
+      expect(AuditEvent.order(:created_at).last.payload_json["action"]).to eq("history_state_reset")
+    end
+
+    it "rejects reset for non-tautulli integrations" do
+      sign_in_operator!
+      reauthenticate!
+      integration = Integration.create!(
+        kind: "radarr",
+        name: "Radarr Main",
+        base_url: "https://radarr.local",
+        api_key: "secret",
+        verify_ssl: true
+      )
+
+      post "/integrations/#{integration.id}/reset_history_state"
+
+      expect(response).to redirect_to("/settings")
+      expect(flash[:alert]).to include("only available for Tautulli")
     end
   end
 end

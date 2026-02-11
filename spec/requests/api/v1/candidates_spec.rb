@@ -93,7 +93,11 @@ RSpec.describe "Api::V1::Candidates", type: :request do
         last_watched_at: 10.days.ago
       )
 
-      get "/api/v1/candidates", params: { scope: "movie", plex_user_ids: [ user_one.id, user_two.id ] }, as: :json
+      get "/api/v1/candidates", params: {
+        scope: "movie",
+        plex_user_ids: [ user_one.id, user_two.id ],
+        watched_match_mode: "all"
+      }, as: :json
 
       expect(response).to have_http_status(:ok)
       expect(response.headers["X-Cullarr-Api-Version"]).to eq("v1")
@@ -144,7 +148,11 @@ RSpec.describe "Api::V1::Candidates", type: :request do
       user = PlexUser.create!(tautulli_user_id: 61, friendly_name: "TV User", is_hidden: false)
       WatchStat.create!(plex_user: user, watchable: episode, play_count: 1, last_watched_at: 2.days.ago)
 
-      get "/api/v1/candidates", params: { scope: "tv_episode", plex_user_ids: [ user.id ] }, as: :json
+      get "/api/v1/candidates", params: {
+        scope: "tv_episode",
+        plex_user_ids: [ user.id ],
+        watched_match_mode: "all"
+      }, as: :json
 
       expect(response).to have_http_status(:ok)
       expect(response.parsed_body.fetch("scope")).to eq("tv_episode")
@@ -209,7 +217,12 @@ RSpec.describe "Api::V1::Candidates", type: :request do
         max_view_offset_ms: 5_000
       )
 
-      get "/api/v1/candidates", params: { scope: "tv_season", include_blocked: true, plex_user_ids: [ user.id ] }, as: :json
+      get "/api/v1/candidates", params: {
+        scope: "tv_season",
+        include_blocked: true,
+        plex_user_ids: [ user.id ],
+        watched_match_mode: "all"
+      }, as: :json
 
       expect(response).to have_http_status(:ok)
       row = response.parsed_body.fetch("items").first
@@ -266,7 +279,12 @@ RSpec.describe "Api::V1::Candidates", type: :request do
       WatchStat.create!(plex_user: user, watchable: episode_one, play_count: 1)
       WatchStat.create!(plex_user: user, watchable: episode_two, play_count: 1)
 
-      get "/api/v1/candidates", params: { scope: "tv_show", include_blocked: true, plex_user_ids: [ user.id ] }, as: :json
+      get "/api/v1/candidates", params: {
+        scope: "tv_show",
+        include_blocked: true,
+        plex_user_ids: [ user.id ],
+        watched_match_mode: "all"
+      }, as: :json
 
       expect(response).to have_http_status(:ok)
       row = response.parsed_body.fetch("items").first
@@ -304,11 +322,20 @@ RSpec.describe "Api::V1::Candidates", type: :request do
         max_view_offset_ms: 20_000
       )
 
-      get "/api/v1/candidates", params: { scope: "movie", plex_user_ids: [ user.id ] }, as: :json
+      get "/api/v1/candidates", params: {
+        scope: "movie",
+        plex_user_ids: [ user.id ],
+        watched_match_mode: "all"
+      }, as: :json
       expect(response).to have_http_status(:ok)
       expect(response.parsed_body.fetch("items")).to eq([])
 
-      get "/api/v1/candidates", params: { scope: "movie", include_blocked: true, plex_user_ids: [ user.id ] }, as: :json
+      get "/api/v1/candidates", params: {
+        scope: "movie",
+        include_blocked: true,
+        plex_user_ids: [ user.id ],
+        watched_match_mode: "all"
+      }, as: :json
       expect(response).to have_http_status(:ok)
       expect(response.parsed_body.fetch("items").first.fetch("blocker_flags")).to include("in_progress_any")
     end
@@ -336,7 +363,11 @@ RSpec.describe "Api::V1::Candidates", type: :request do
       WatchStat.create!(plex_user: user, watchable: movie, play_count: 1)
 
       expect do
-        get "/api/v1/candidates", params: { scope: "movie", plex_user_ids: [ user.id ] }, as: :json
+        get "/api/v1/candidates", params: {
+          scope: "movie",
+          plex_user_ids: [ user.id ],
+          watched_match_mode: "all"
+        }, as: :json
       end.to change { AuditEvent.where(event_name: "cullarr.guardrail.blocked_path_excluded").count }.by(1)
 
       expect(response).to have_http_status(:ok)
@@ -371,11 +402,39 @@ RSpec.describe "Api::V1::Candidates", type: :request do
       get "/api/v1/candidates", params: { scope: "movie" }, as: :json
       expect(response).to have_http_status(:ok)
       expect(response.parsed_body.fetch("items")).to eq([])
+      expect(response.parsed_body.dig("filters", "watched_match_mode")).to eq("none")
+      expect(response.parsed_body.dig("filters", "plex_user_ids")).to eq([])
+      expect(response.parsed_body.dig("diagnostics", "selected_user_count")).to eq(0)
+      expect(response.parsed_body.dig("diagnostics", "effective_selected_user_count")).to eq(2)
+      expect(response.parsed_body.dig("diagnostics", "watched_prefilter_applied")).to be(true)
+      expect(response.parsed_body.dig("diagnostics", "rows_scanned")).to eq(0)
 
-      get "/api/v1/candidates", params: { scope: "movie", plex_user_ids: [ watched_user.id ] }, as: :json
+      get "/api/v1/candidates", params: {
+        scope: "movie",
+        plex_user_ids: [ watched_user.id ],
+        watched_match_mode: "all"
+      }, as: :json
       expect(response).to have_http_status(:ok)
       expect(response.parsed_body.fetch("items").size).to eq(1)
       expect(response.parsed_body.dig("filters", "plex_user_ids")).to eq([ watched_user.id ])
+
+      get "/api/v1/candidates", params: {
+        scope: "movie",
+        plex_user_ids: [ unwatched_user.id ],
+        watched_match_mode: "none"
+      }, as: :json
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body.fetch("items").size).to eq(1)
+      expect(response.parsed_body.dig("filters", "watched_match_mode")).to eq("none")
+
+      get "/api/v1/candidates", params: {
+        scope: "movie",
+        plex_user_ids: [ watched_user.id, unwatched_user.id ],
+        watched_match_mode: "any"
+      }, as: :json
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body.fetch("items").size).to eq(1)
+      expect(response.parsed_body.dig("filters", "watched_match_mode")).to eq("any")
     end
 
     it "supports cursor pagination with next_cursor metadata" do
@@ -403,13 +462,24 @@ RSpec.describe "Api::V1::Candidates", type: :request do
         WatchStat.create!(plex_user: user, watchable: movie, play_count: 1)
       end
 
-      get "/api/v1/candidates", params: { scope: "movie", limit: 1, plex_user_ids: [ user.id ] }, as: :json
+      get "/api/v1/candidates", params: {
+        scope: "movie",
+        limit: 1,
+        plex_user_ids: [ user.id ],
+        watched_match_mode: "all"
+      }, as: :json
       expect(response).to have_http_status(:ok)
       first_page = response.parsed_body
       expect(first_page.fetch("items").size).to eq(1)
       expect(first_page.dig("page", "next_cursor")).to be_present
 
-      get "/api/v1/candidates", params: { scope: "movie", limit: 1, cursor: first_page.dig("page", "next_cursor"), plex_user_ids: [ user.id ] }, as: :json
+      get "/api/v1/candidates", params: {
+        scope: "movie",
+        limit: 1,
+        cursor: first_page.dig("page", "next_cursor"),
+        plex_user_ids: [ user.id ],
+        watched_match_mode: "all"
+      }, as: :json
       expect(response).to have_http_status(:ok)
       second_page = response.parsed_body
       expect(second_page.fetch("items").size).to eq(1)
@@ -456,6 +526,16 @@ RSpec.describe "Api::V1::Candidates", type: :request do
       expect(response.parsed_body.dig("error", "details", "fields", "include_blocked")).to eq([ "must be true or false" ])
     end
 
+    it "validates watched_match_mode format" do
+      sign_in_operator!
+
+      get "/api/v1/candidates", params: { scope: "movie", watched_match_mode: "invalid_mode" }, as: :json
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.parsed_body.dig("error", "code")).to eq("validation_failed")
+      expect(response.parsed_body.dig("error", "details", "fields", "watched_match_mode")).to eq([ "must be one of: all, any, none" ])
+    end
+
     it "uses saved view scope and filters when query params are omitted" do
       sign_in_operator!
       integration = Integration.create!(
@@ -483,7 +563,7 @@ RSpec.describe "Api::V1::Candidates", type: :request do
         size_bytes: 1.gigabyte
       )
       user = PlexUser.create!(tautulli_user_id: 81, friendly_name: "Preset User", is_hidden: false)
-      WatchStat.create!(plex_user: user, watchable: episode, play_count: 1)
+      WatchStat.create!(plex_user: user, watchable: episode, play_count: 0)
 
       saved_view = SavedView.create!(
         name: "Episode Preset",
@@ -500,6 +580,7 @@ RSpec.describe "Api::V1::Candidates", type: :request do
       expect(response.parsed_body.fetch("scope")).to eq("tv_episode")
       expect(response.parsed_body.dig("filters", "saved_view_id")).to eq(saved_view.id)
       expect(response.parsed_body.dig("filters", "plex_user_ids")).to eq([ user.id ])
+      expect(response.parsed_body.dig("filters", "watched_match_mode")).to eq("none")
       expect(response.parsed_body.fetch("items").size).to eq(1)
       expect(response.parsed_body.fetch("items").first.fetch("id")).to eq("episode:#{episode.id}")
     end
@@ -533,7 +614,11 @@ RSpec.describe "Api::V1::Candidates", type: :request do
         filters_json: { "plex_user_ids" => [ unwatched_user.id ] }
       )
 
-      get "/api/v1/candidates", params: { saved_view_id: saved_view.id, plex_user_ids: [ watched_user.id ] }, as: :json
+      get "/api/v1/candidates", params: {
+        saved_view_id: saved_view.id,
+        plex_user_ids: [ watched_user.id ],
+        watched_match_mode: "all"
+      }, as: :json
 
       expect(response).to have_http_status(:ok)
       expect(response.parsed_body.fetch("items").size).to eq(1)

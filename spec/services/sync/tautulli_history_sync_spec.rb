@@ -33,6 +33,7 @@ RSpec.describe Sync::TautulliHistorySync, type: :service do
 
     adapter = instance_double(Integrations::TautulliAdapter)
     allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli_integration).and_return(adapter)
+    allow(adapter).to receive(:fetch_metadata).and_raise(Integrations::ContractMismatchError, "metadata unavailable")
     allow(adapter).to receive(:fetch_history_page).with(
       start: 0,
       length: 200,
@@ -101,6 +102,7 @@ RSpec.describe Sync::TautulliHistorySync, type: :service do
 
     adapter = instance_double(Integrations::TautulliAdapter)
     allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli_integration).and_return(adapter)
+    allow(adapter).to receive(:fetch_metadata).and_raise(Integrations::ContractMismatchError, "metadata unavailable")
     allow(adapter).to receive(:fetch_history_page).with(
       start: 0,
       length: 200,
@@ -138,7 +140,9 @@ RSpec.describe Sync::TautulliHistorySync, type: :service do
       watch_stats_upserted: 0
     )
     expect(WatchStat.where(plex_user: plex_user)).to be_empty
-    expect(tautulli_integration.reload.settings_json.dig("history_sync_state", "watermark_id")).to eq(5001)
+    state = tautulli_integration.reload.settings_json.fetch("history_sync_state")
+    expect(state.fetch("watermark_id")).to eq(0)
+    expect(state.fetch("max_seen_history_id")).to eq(5001)
   end
 
   it "continues processing when a page includes invalid rows" do
@@ -165,6 +169,7 @@ RSpec.describe Sync::TautulliHistorySync, type: :service do
 
     adapter = instance_double(Integrations::TautulliAdapter)
     allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli_integration).and_return(adapter)
+    allow(adapter).to receive(:fetch_metadata).and_raise(Integrations::ContractMismatchError, "metadata unavailable")
     allow(adapter).to receive(:fetch_history_page).with(
       start: 0,
       length: 200,
@@ -200,6 +205,331 @@ RSpec.describe Sync::TautulliHistorySync, type: :service do
       rows_skipped: 1,
       watch_stats_upserted: 1
     )
+  end
+
+  it "advances watermark only from persisted rows while keeping max_seen for scan horizon" do
+    tautulli_integration = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Watermark Safety",
+      base_url: "https://tautulli.watermark.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: { "tautulli_history_page_size" => 200 }
+    )
+    plex_user = PlexUser.create!(tautulli_user_id: 88, friendly_name: "Dana", is_hidden: false)
+    movie_integration = Integration.create!(
+      kind: "radarr",
+      name: "Radarr Watermark Safety",
+      base_url: "https://radarr.watermark.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    movie = Movie.create!(
+      integration: movie_integration,
+      radarr_movie_id: 1801,
+      title: "Watermark Movie",
+      plex_rating_key: "plex-watermark-1801"
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).and_return(health_check)
+
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli_integration).and_return(adapter)
+    allow(adapter).to receive(:fetch_metadata).and_raise(Integrations::ContractMismatchError, "metadata unavailable")
+    allow(adapter).to receive(:fetch_history_page).with(
+      start: 0,
+      length: 200,
+      order_column: "id",
+      order_dir: "desc"
+    ).and_return(
+      {
+        rows: [
+          {
+            history_id: 9102,
+            tautulli_user_id: plex_user.tautulli_user_id,
+            media_type: "movie",
+            plex_rating_key: "missing-rating-key",
+            viewed_at: Time.zone.parse("2026-02-11 10:00:00"),
+            play_count: 1,
+            view_offset_ms: 800_000,
+            duration_ms: 1_000_000
+          },
+          {
+            history_id: 9101,
+            tautulli_user_id: plex_user.tautulli_user_id,
+            media_type: "movie",
+            plex_rating_key: movie.plex_rating_key,
+            viewed_at: Time.zone.parse("2026-02-11 09:00:00"),
+            play_count: 1,
+            view_offset_ms: 900_000,
+            duration_ms: 1_000_000
+          }
+        ],
+        raw_rows_count: 2,
+        rows_skipped_invalid: 0,
+        has_more: false,
+        next_start: 2
+      }
+    )
+
+    result = described_class.new(sync_run: sync_run, correlation_id: "corr-watermark-safety").call
+
+    expect(result).to include(
+      rows_fetched: 2,
+      rows_processed: 1,
+      rows_skipped_missing_watchable: 1,
+      watch_stats_upserted: 1
+    )
+    state = tautulli_integration.reload.settings_json.fetch("history_sync_state")
+    expect(state.fetch("watermark_id")).to eq(9101)
+    expect(state.fetch("max_seen_history_id")).to eq(9102)
+  end
+
+  it "continues pagination when early pages are below overlap bound but later pages contain new history ids" do
+    tautulli_integration = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Non Monotonic",
+      base_url: "https://tautulli.non-monotonic.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: {
+        "tautulli_history_page_size" => 2,
+        "history_sync_state" => { "watermark_id" => 0, "max_seen_history_id" => 2_000, "recent_ids" => [] }
+      }
+    )
+    plex_user = PlexUser.create!(tautulli_user_id: 99, friendly_name: "Eve", is_hidden: false)
+    movie_integration = Integration.create!(
+      kind: "radarr",
+      name: "Radarr Non Monotonic",
+      base_url: "https://radarr.non-monotonic.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    movie = Movie.create!(
+      integration: movie_integration,
+      radarr_movie_id: 1_901,
+      title: "Non Monotonic Movie",
+      plex_rating_key: "plex-non-monotonic-1901"
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).and_return(health_check)
+
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli_integration).and_return(adapter)
+    allow(adapter).to receive(:fetch_metadata).and_raise(Integrations::ContractMismatchError, "metadata unavailable")
+    allow(adapter).to receive(:fetch_history_page).with(
+      start: 0,
+      length: 50,
+      order_column: "id",
+      order_dir: "desc"
+    ).and_return(
+      {
+        rows: [
+          {
+            history_id: 1_850,
+            tautulli_user_id: plex_user.tautulli_user_id,
+            media_type: "movie",
+            plex_rating_key: "older-row",
+            viewed_at: Time.zone.parse("2026-02-11 08:00:00"),
+            play_count: 1,
+            view_offset_ms: 500_000,
+            duration_ms: 1_000_000
+          }
+        ],
+        raw_rows_count: 2,
+        rows_skipped_invalid: 1,
+        has_more: true,
+        next_start: 2
+      }
+    )
+    allow(adapter).to receive(:fetch_history_page).with(
+      start: 2,
+      length: 50,
+      order_column: "id",
+      order_dir: "desc"
+    ).and_return(
+      {
+        rows: [
+          {
+            history_id: 2_050,
+            tautulli_user_id: plex_user.tautulli_user_id,
+            media_type: "movie",
+            plex_rating_key: movie.plex_rating_key,
+            viewed_at: Time.zone.parse("2026-02-11 09:00:00"),
+            play_count: 1,
+            view_offset_ms: 900_000,
+            duration_ms: 1_000_000
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        has_more: false,
+        next_start: 3
+      }
+    )
+
+    result = described_class.new(sync_run:, correlation_id: "corr-non-monotonic").call
+
+    expect(result).to include(rows_fetched: 3, rows_processed: 1, watch_stats_upserted: 1)
+    expect(WatchStat.where(plex_user:, watchable: movie).count).to eq(1)
+  end
+
+  it "reconciles missing plex mappings via tautulli metadata external ids" do
+    tautulli_integration = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Metadata Reconcile",
+      base_url: "https://tautulli.reconcile.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: { "tautulli_history_page_size" => 200 }
+    )
+    plex_user = PlexUser.create!(tautulli_user_id: 121, friendly_name: "Frank", is_hidden: false)
+    movie_integration = Integration.create!(
+      kind: "radarr",
+      name: "Radarr Metadata Reconcile",
+      base_url: "https://radarr.reconcile.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    movie = Movie.create!(
+      integration: movie_integration,
+      radarr_movie_id: 2_001,
+      title: "Needs Mapping",
+      tmdb_id: 2_001,
+      plex_rating_key: nil,
+      plex_guid: nil
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).and_return(health_check)
+
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli_integration).and_return(adapter)
+    allow(adapter).to receive(:fetch_history_page).with(
+      start: 0,
+      length: 200,
+      order_column: "id",
+      order_dir: "desc"
+    ).and_return(
+      {
+        rows: [
+          {
+            history_id: 12_001,
+            tautulli_user_id: plex_user.tautulli_user_id,
+            media_type: "movie",
+            plex_rating_key: "plex-new-2001",
+            viewed_at: Time.zone.parse("2026-02-11 11:00:00"),
+            play_count: 1,
+            view_offset_ms: 900_000,
+            duration_ms: 1_000_000
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        has_more: false,
+        next_start: 1
+      }
+    )
+    allow(adapter).to receive(:fetch_metadata).with(rating_key: "plex-new-2001").and_return(
+      {
+        duration_ms: 1_000_000,
+        plex_guid: "plex://movie/2001",
+        external_ids: { tmdb_id: 2_001 }
+      }
+    )
+
+    result = described_class.new(sync_run:, correlation_id: "corr-reconcile").call
+
+    expect(result).to include(rows_processed: 1, watch_stats_upserted: 1, rows_skipped_missing_watchable: 0)
+    expect(movie.reload.plex_rating_key).to eq("plex-new-2001")
+    expect(WatchStat.where(plex_user:, watchable: movie).count).to eq(1)
+  end
+
+  it "rescans from a reset watermark when stored history state is stale" do
+    tautulli_integration = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Stale State",
+      base_url: "https://tautulli.stale.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: {
+        "tautulli_history_page_size" => 200,
+        "history_sync_state" => { "watermark_id" => 0, "max_seen_history_id" => 50_000, "recent_ids" => [] }
+      }
+    )
+    plex_user = PlexUser.create!(tautulli_user_id: 141, friendly_name: "Grace", is_hidden: false)
+    movie_integration = Integration.create!(
+      kind: "radarr",
+      name: "Radarr Stale State",
+      base_url: "https://radarr.stale.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    movie = Movie.create!(
+      integration: movie_integration,
+      radarr_movie_id: 2_101,
+      title: "Stale State Movie",
+      plex_rating_key: "plex-stale-2101"
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).and_return(health_check)
+
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli_integration).and_return(adapter)
+    allow(adapter).to receive(:fetch_metadata).and_raise(Integrations::ContractMismatchError, "metadata unavailable")
+    allow(adapter).to receive(:fetch_history_page).with(
+      start: 0,
+      length: 200,
+      order_column: "id",
+      order_dir: "desc"
+    ).and_return(
+      {
+        rows: [
+          {
+            history_id: 10,
+            tautulli_user_id: plex_user.tautulli_user_id,
+            media_type: "movie",
+            plex_rating_key: movie.plex_rating_key,
+            viewed_at: Time.zone.parse("2026-02-11 12:00:00"),
+            play_count: 1,
+            view_offset_ms: 500_000,
+            duration_ms: 1_000_000
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        has_more: false,
+        next_start: 1
+      },
+      {
+        rows: [
+          {
+            history_id: 12,
+            tautulli_user_id: plex_user.tautulli_user_id,
+            media_type: "movie",
+            plex_rating_key: movie.plex_rating_key,
+            viewed_at: Time.zone.parse("2026-02-11 12:05:00"),
+            play_count: 1,
+            view_offset_ms: 750_000,
+            duration_ms: 1_000_000
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        has_more: false,
+        next_start: 1
+      }
+    )
+
+    result = described_class.new(sync_run:, correlation_id: "corr-stale-state").call
+
+    expect(result).to include(rows_processed: 1, watch_stats_upserted: 1)
+    state = tautulli_integration.reload.settings_json.fetch("history_sync_state")
+    expect(state.fetch("watermark_id")).to eq(12)
+    expect(state.fetch("max_seen_history_id")).to eq(12)
   end
 end
 # rubocop:enable RSpec/ExampleLength

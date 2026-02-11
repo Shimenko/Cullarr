@@ -2,12 +2,16 @@ class Sync::SchedulerJob < ApplicationJob
   queue_as :default
 
   def perform
+    correlation_id = SecureRandom.uuid
+    recovery_result = recover_stale_runs!(correlation_id:)
+    return if recovery_result.requeued_run_ids.any?
+
     schedule_window = build_schedule_window
     return unless schedule_window.due?
 
     Sync::TriggerRun.new(
       trigger: "scheduler",
-      correlation_id: SecureRandom.uuid,
+      correlation_id: correlation_id,
       actor: nil
     ).call
   rescue StandardError => error
@@ -16,6 +20,14 @@ class Sync::SchedulerJob < ApplicationJob
   end
 
   private
+
+  def recover_stale_runs!(correlation_id:)
+    Sync::RecoverStaleRuns.new(
+      correlation_id: correlation_id,
+      actor: nil,
+      enqueue_replacement: true
+    ).call
+  end
 
   def build_schedule_window
     Sync::ScheduleWindow.new(

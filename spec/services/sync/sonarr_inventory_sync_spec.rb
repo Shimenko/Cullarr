@@ -44,6 +44,7 @@ RSpec.describe Sync::SonarrInventorySync, type: :service do
       [
         {
           sonarr_episode_id: 5001,
+          episode_file_id: 9001,
           season_number: 1,
           episode_number: 1,
           title: "Pilot",
@@ -80,6 +81,62 @@ RSpec.describe Sync::SonarrInventorySync, type: :service do
     expect(media_file.path_canonical).to eq("/mnt/tv/Example Show/Season 01/Pilot.mkv")
   end
 
+  it "links episode files through episodeFileId when file payload omits episodeId" do
+    integration = Integration.create!(
+      kind: "sonarr",
+      name: "Sonarr Episode File Fallback",
+      base_url: "https://sonarr.fallback.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: { "sonarr_fetch_workers" => 1 }
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(integration, raise_on_unsupported: true).and_return(health_check)
+
+    adapter = instance_double(Integrations::SonarrAdapter)
+    allow(Integrations::SonarrAdapter).to receive(:new).with(integration:).and_return(adapter)
+    allow(adapter).to receive(:fetch_series).and_return(
+      [
+        {
+          sonarr_series_id: 909,
+          title: "Fallback Mapping Show",
+          statistics: { total_episode_count: 1, episode_file_count: 1 },
+          metadata: {}
+        }
+      ]
+    )
+    allow(adapter).to receive(:fetch_episodes).with(series_id: 909).and_return(
+      [
+        {
+          sonarr_episode_id: 9901,
+          episode_file_id: 8801,
+          season_number: 1,
+          episode_number: 1,
+          title: "Fallback Pilot"
+        }
+      ]
+    )
+    allow(adapter).to receive(:fetch_episode_files).with(series_id: 909).and_return(
+      [
+        {
+          arr_file_id: 8801,
+          sonarr_episode_id: nil,
+          path: "/data/tv/Fallback Mapping Show/Season 01/Pilot.mkv",
+          size_bytes: 1000,
+          quality: {}
+        }
+      ]
+    )
+
+    result = described_class.new(sync_run:, correlation_id: "corr-sonarr-episode-file-fallback").call
+
+    episode = Episode.find_by!(integration:, sonarr_episode_id: 9901)
+    media_file = MediaFile.find_by!(integration:, arr_file_id: 8801)
+    expect(result).to include(media_files_fetched: 1, media_files_upserted: 1)
+    expect(media_file.attachable).to eq(episode)
+  end
+
   it "stores canonical paths with separator-safe structure under root mappings" do
     integration = Integration.create!(
       kind: "sonarr",
@@ -110,6 +167,7 @@ RSpec.describe Sync::SonarrInventorySync, type: :service do
       [
         {
           sonarr_episode_id: 5202,
+          episode_file_id: 9202,
           season_number: 1,
           episode_number: 2,
           title: "Second",

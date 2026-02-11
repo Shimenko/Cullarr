@@ -494,6 +494,12 @@
               <%= render Ui::ButtonComponent.new(label: "Check", variant: :secondary, type: :submit) %>
             <% end %>
 
+            <% if integration.tautulli? %>
+              <%= form_with url: reset_history_state_integration_path(integration), method: :post do %>
+                <%= render Ui::ButtonComponent.new(label: "Reset History State", variant: :secondary, type: :submit) %>
+              <% end %>
+            <% end %>
+
             <%= form_with url: integration_path(integration), method: :delete do %>
               <%= render Ui::ButtonComponent.new(label: "Delete", variant: :danger, type: :submit) %>
             <% end %>

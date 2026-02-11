@@ -1,6 +1,6 @@
 module Candidates
   class Query
-    Result = Struct.new(:scope, :filters, :items, :next_cursor, keyword_init: true)
+    Result = Struct.new(:scope, :filters, :items, :next_cursor, :diagnostics, keyword_init: true)
 
     class InvalidScopeError < StandardError; end
 
@@ -23,6 +23,7 @@ module Candidates
     end
 
     SUPPORTED_SCOPES = %w[movie tv_episode tv_season tv_show].freeze
+    WATCHED_MATCH_MODES = %w[all any none].freeze
     DEFAULT_LIMIT = 50
     MAX_LIMIT = 100
     PREFETCH_MULTIPLIER = 3
@@ -35,11 +36,22 @@ module Candidates
       "ambiguous_ownership" => "cullarr.guardrail.blocked_ambiguous_ownership"
     }.freeze
 
-    def initialize(scope:, saved_view_id: nil, plex_user_ids:, include_blocked:, cursor:, limit:, correlation_id: nil, actor: nil)
+    def initialize(
+      scope:,
+      saved_view_id: nil,
+      plex_user_ids:,
+      include_blocked:,
+      watched_match_mode: nil,
+      cursor:,
+      limit:,
+      correlation_id: nil,
+      actor: nil
+    )
       @scope = scope.to_s
       @saved_view_id = saved_view_id
       @plex_user_ids = plex_user_ids
       @include_blocked = include_blocked
+      @watched_match_mode = watched_match_mode
       @cursor = cursor
       @limit = limit
       @correlation_id = correlation_id
@@ -47,6 +59,7 @@ module Candidates
       @guardrail_block_counts = Hash.new(0)
       @resolved_scope = nil
       @resolved_include_blocked = false
+      @resolved_watched_match_mode = "none"
     end
 
     def call
@@ -54,17 +67,35 @@ module Candidates
       @resolved_scope = resolved_scope_for(saved_view)
       validate_scope!(@resolved_scope)
       @resolved_include_blocked = resolved_include_blocked_for(saved_view)
+      @resolved_watched_match_mode = resolved_watched_match_mode_for(saved_view)
 
       selected_user_ids = resolve_selected_user_ids!(saved_view:)
+      effective_user_ids = effective_selected_user_ids_for(selected_user_ids)
       result = case @resolved_scope
       when "movie"
-        fetch_movie_rows(selected_user_ids:, include_blocked: @resolved_include_blocked)
+        fetch_movie_rows(
+          selected_user_ids: effective_user_ids,
+          include_blocked: @resolved_include_blocked,
+          watched_match_mode: @resolved_watched_match_mode
+        )
       when "tv_episode"
-        fetch_episode_rows(selected_user_ids:, include_blocked: @resolved_include_blocked)
+        fetch_episode_rows(
+          selected_user_ids: effective_user_ids,
+          include_blocked: @resolved_include_blocked,
+          watched_match_mode: @resolved_watched_match_mode
+        )
       when "tv_season"
-        fetch_season_rows(selected_user_ids:, include_blocked: @resolved_include_blocked)
+        fetch_season_rows(
+          selected_user_ids: effective_user_ids,
+          include_blocked: @resolved_include_blocked,
+          watched_match_mode: @resolved_watched_match_mode
+        )
       when "tv_show"
-        fetch_show_rows(selected_user_ids:, include_blocked: @resolved_include_blocked)
+        fetch_show_rows(
+          selected_user_ids: effective_user_ids,
+          include_blocked: @resolved_include_blocked,
+          watched_match_mode: @resolved_watched_match_mode
+        )
       else
         raise InvalidScopeError, "must be one of: #{SUPPORTED_SCOPES.join(', ')}"
       end
@@ -74,10 +105,15 @@ module Candidates
         filters: {
           plex_user_ids: selected_user_ids,
           include_blocked: @resolved_include_blocked,
+          watched_match_mode: @resolved_watched_match_mode,
           saved_view_id: saved_view&.id
         },
         items: result.fetch(:items),
-        next_cursor: result.fetch(:next_cursor)
+        next_cursor: result.fetch(:next_cursor),
+        diagnostics: result.fetch(:diagnostics).merge(
+          selected_user_count: selected_user_ids.size,
+          effective_selected_user_count: effective_user_ids.size
+        )
       )
     ensure
       emit_guardrail_events!
@@ -85,7 +121,7 @@ module Candidates
 
     private
 
-    attr_reader :actor, :correlation_id, :cursor, :guardrail_block_counts, :include_blocked, :limit, :plex_user_ids, :saved_view_id, :scope
+    attr_reader :actor, :correlation_id, :cursor, :guardrail_block_counts, :include_blocked, :limit, :plex_user_ids, :saved_view_id, :scope, :watched_match_mode
 
     def validate_scope!(value)
       return if SUPPORTED_SCOPES.include?(value)
@@ -123,9 +159,15 @@ module Candidates
         value: plex_user_ids.presence || preset_value,
         field_name: "plex_user_ids"
       )
-      return PlexUser.order(:id).pluck(:id) if ids.nil?
+      return [] if ids.nil?
 
       ids
+    end
+
+    def effective_selected_user_ids_for(selected_user_ids)
+      return selected_user_ids if selected_user_ids.any?
+
+      PlexUser.order(:id).pluck(:id)
     end
 
     def resolved_include_blocked_for(saved_view)
@@ -139,6 +181,25 @@ module Candidates
       false
     end
 
+    def resolved_watched_match_mode_for(saved_view)
+      preset_value = saved_view&.filters_json&.dig("watched_match_mode")
+      request_value = parse_optional_enum(
+        value: watched_match_mode,
+        field_name: "watched_match_mode",
+        allowed_values: WATCHED_MATCH_MODES
+      )
+      return request_value unless request_value.nil?
+
+      preset_mode = parse_optional_enum(
+        value: preset_value,
+        field_name: "watched_match_mode",
+        allowed_values: WATCHED_MATCH_MODES
+      )
+      return preset_mode unless preset_mode.nil?
+
+      "none"
+    end
+
     def parse_optional_boolean(value:, field_name:)
       return nil if value.nil?
       return true if value == true
@@ -149,6 +210,15 @@ module Candidates
       return false if normalized_value == "false"
 
       raise InvalidFilterError.new(fields: { field_name => [ "must be true or false" ] })
+    end
+
+    def parse_optional_enum(value:, field_name:, allowed_values:)
+      return nil if value.nil?
+
+      normalized = value.to_s.strip.downcase
+      return normalized if allowed_values.include?(normalized)
+
+      raise InvalidFilterError.new(fields: { field_name => [ "must be one of: #{allowed_values.join(', ')}" ] })
     end
 
     def normalize_optional_positive_integer_array(value:, field_name:)
@@ -240,73 +310,107 @@ module Candidates
         .order(id: :desc)
     end
 
-    def fetch_movie_rows(selected_user_ids:, include_blocked:)
-      relation = apply_watched_prefilter(
+    def fetch_movie_rows(selected_user_ids:, include_blocked:, watched_match_mode:)
+      prefilter = apply_watched_prefilter(
         relation: movie_scope,
         watchable_type: "Movie",
-        selected_user_ids:
+        selected_user_ids:,
+        watched_match_mode:
       )
       fetch_rows(
-        relation: relation,
+        relation: prefilter.fetch(:relation),
         selected_user_ids:,
-        include_blocked:
+        include_blocked:,
+        watched_match_mode:,
+        watched_prefilter_applied: prefilter.fetch(:applied)
       ) do |movie|
         build_movie_row(movie, selected_user_ids:)
       end
     end
 
-    def fetch_episode_rows(selected_user_ids:, include_blocked:)
-      relation = apply_watched_prefilter(
+    def fetch_episode_rows(selected_user_ids:, include_blocked:, watched_match_mode:)
+      prefilter = apply_watched_prefilter(
         relation: episode_scope,
         watchable_type: "Episode",
-        selected_user_ids:
+        selected_user_ids:,
+        watched_match_mode:
       )
       fetch_rows(
-        relation: relation,
+        relation: prefilter.fetch(:relation),
         selected_user_ids:,
-        include_blocked:
+        include_blocked:,
+        watched_match_mode:,
+        watched_prefilter_applied: prefilter.fetch(:applied)
       ) do |episode|
         build_episode_row(episode, selected_user_ids:)
       end
     end
 
-    def fetch_season_rows(selected_user_ids:, include_blocked:)
+    def fetch_season_rows(selected_user_ids:, include_blocked:, watched_match_mode:)
       fetch_rows(
         relation: season_scope,
         selected_user_ids:,
-        include_blocked:
+        include_blocked:,
+        watched_match_mode:,
+        watched_prefilter_applied: false
       ) do |season|
         build_season_row(season, selected_user_ids:)
       end
     end
 
-    def fetch_show_rows(selected_user_ids:, include_blocked:)
+    def fetch_show_rows(selected_user_ids:, include_blocked:, watched_match_mode:)
       fetch_rows(
         relation: show_scope,
         selected_user_ids:,
-        include_blocked:
+        include_blocked:,
+        watched_match_mode:,
+        watched_prefilter_applied: false
       ) do |series|
         build_show_row(series, selected_user_ids:)
       end
     end
 
-    def apply_watched_prefilter(relation:, watchable_type:, selected_user_ids:)
-      return relation.none if selected_user_ids.empty?
-      return relation unless watched_mode == "play_count"
+    def apply_watched_prefilter(relation:, watchable_type:, selected_user_ids:, watched_match_mode:)
+      if selected_user_ids.empty?
+        return { relation: relation, applied: false } if watched_match_mode == "none"
+        return { relation: relation.none, applied: true }
+      end
+      return { relation: relation, applied: false } unless watched_mode == "play_count"
 
-      relation.where(id: watched_watchable_ids_subquery(watchable_type:, selected_user_ids:))
+      if watched_match_mode == "none"
+        return {
+          relation: relation.where.not(id: watched_watchable_ids_subquery(
+            watchable_type: watchable_type,
+            selected_user_ids: selected_user_ids,
+            watched_match_mode: "any"
+          )),
+          applied: true
+        }
+      end
+
+      {
+        relation: relation.where(id: watched_watchable_ids_subquery(
+          watchable_type: watchable_type,
+          selected_user_ids: selected_user_ids,
+          watched_match_mode: watched_match_mode
+        )),
+        applied: true
+      }
     end
 
-    def watched_watchable_ids_subquery(watchable_type:, selected_user_ids:)
-      WatchStat
+    def watched_watchable_ids_subquery(watchable_type:, selected_user_ids:, watched_match_mode:)
+      base_query = WatchStat
         .where(watchable_type:, plex_user_id: selected_user_ids)
         .where(WatchStat.arel_table[:play_count].gteq(1).or(WatchStat.arel_table[:watched].eq(true)))
+      return base_query.select(:watchable_id).distinct if watched_match_mode == "any"
+
+      base_query
         .group(:watchable_id)
         .having("COUNT(DISTINCT watch_stats.plex_user_id) = ?", selected_user_ids.size)
         .select(:watchable_id)
     end
 
-    def fetch_rows(relation:, selected_user_ids:, include_blocked:)
+    def fetch_rows(relation:, selected_user_ids:, include_blocked:, watched_match_mode:, watched_prefilter_applied:)
       limit_value = parsed_limit
       start_cursor = parsed_cursor
       batch_limit = limit_value * PREFETCH_MULTIPLIER
@@ -314,6 +418,14 @@ module Candidates
       items = []
       last_seen_id = nil
       next_upper_bound = start_cursor
+      diagnostics = {
+        watched_match_mode: watched_match_mode,
+        watched_prefilter_applied: watched_prefilter_applied,
+        rows_scanned: 0,
+        rows_filtered_unwatched: 0,
+        rows_filtered_blocked: 0,
+        rows_returned: 0
+      }
 
       loop do
         scoped = relation
@@ -323,14 +435,20 @@ module Candidates
 
         batch.each do |record|
           row = yield(record)
+          diagnostics[:rows_scanned] += 1
           last_seen_id = record.id
-          next unless row.dig(:watched_summary, :all_selected_users_watched)
+          unless watched_match_for_row?(row: row, watched_match_mode: watched_match_mode)
+            diagnostics[:rows_filtered_unwatched] += 1
+            next
+          end
           if !include_blocked && row[:blocker_flags].any?
             track_guardrail_blocks(row[:blocker_flags])
+            diagnostics[:rows_filtered_blocked] += 1
             next
           end
 
           items << row
+          diagnostics[:rows_returned] += 1
           break if items.size >= limit_value
         end
 
@@ -342,8 +460,22 @@ module Candidates
 
       {
         items: items,
-        next_cursor: next_cursor_for(relation:, items:, last_seen_id:, limit_value:)
+        next_cursor: next_cursor_for(relation:, items:, last_seen_id:, limit_value:),
+        diagnostics: diagnostics
       }
+    end
+
+    def watched_match_for_row?(row:, watched_match_mode:)
+      watched_summary = row.fetch(:watched_summary, {})
+      watched_user_count = watched_summary.fetch(:watched_user_count, 0).to_i
+
+      if watched_match_mode == "any"
+        watched_user_count.positive?
+      elsif watched_match_mode == "none"
+        watched_user_count.zero?
+      else
+        ActiveModel::Type::Boolean.new.cast(watched_summary.fetch(:all_selected_users_watched, false))
+      end
     end
 
     def next_cursor_for(relation:, items:, last_seen_id:, limit_value:)
@@ -572,6 +704,15 @@ module Candidates
     end
 
     def watched_summary_for_rollup(snapshots:, selected_user_ids:)
+      if snapshots.empty?
+        return {
+          selected_user_count: selected_user_ids.size,
+          watched_user_count: 0,
+          all_selected_users_watched: false,
+          last_watched_at: nil
+        }
+      end
+
       watched_user_count = selected_user_ids.count do |plex_user_id|
         snapshots.all? do |snapshot|
           watched_for_user?(

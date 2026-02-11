@@ -7,6 +7,7 @@ module Api
           saved_view_id: params[:saved_view_id],
           plex_user_ids: params[:plex_user_ids],
           include_blocked: params[:include_blocked],
+          watched_match_mode: params[:watched_match_mode],
           cursor: params[:cursor],
           limit: params[:limit],
           correlation_id: request.request_id,
@@ -17,6 +18,7 @@ module Api
         render json: {
           scope: result.scope,
           filters: result.filters,
+          diagnostics: result.diagnostics,
           items: result.items,
           page: {
             next_cursor: result.next_cursor

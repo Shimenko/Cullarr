@@ -49,6 +49,7 @@ module Integrations
       Array(payload).map do |episode|
         {
           sonarr_episode_id: ensure_present!(episode, :id).to_i,
+          episode_file_id: episode["episodeFileId"]&.to_i,
           season_number: ensure_present!(episode, :seasonNumber).to_i,
           episode_number: ensure_present!(episode, :episodeNumber).to_i,
           title: episode["title"],

@@ -18,6 +18,13 @@
         selected: @scope
       ) %>
 
+      <%= render Ui::SelectComponent.new(
+        name: "watched_match_mode",
+        label: "Watched Match",
+        options: candidate_watched_match_mode_options,
+        selected: @watched_match_mode
+      ) %>
+
       <%= render Ui::CheckboxComponent.new(
         name: "include_blocked",
         label: "Include blocked candidates",
@@ -27,7 +34,7 @@
       ) %>
 
       <div class="md:col-span-3">
-        <p class="ui-help mb-2">Plex users (defaults to all)</p>
+        <p class="ui-help mb-2">Plex users (leave blank to use all users for watched matching)</p>
 
         <% if @plex_users.any? %>
           <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
@@ -52,11 +59,31 @@
         <%= render Ui::ButtonComponent.new(label: "Apply Filters", type: :submit, variant: :primary) %>
       </div>
     <% end %>
+
+    <% diagnostics = (@candidate_diagnostics || {}).with_indifferent_access %>
+    <div class="mt-4 grid gap-3 md:grid-cols-4">
+      <div class="rounded-lg border ui-border p-3 ui-copy">
+        <p class="ui-help">Rows scanned</p>
+        <p class="ui-text-primary font-semibold"><%= diagnostics[:rows_scanned].to_i %></p>
+      </div>
+      <div class="rounded-lg border ui-border p-3 ui-copy">
+        <p class="ui-help">Filtered by watched rule</p>
+        <p class="ui-text-primary font-semibold"><%= diagnostics[:rows_filtered_unwatched].to_i %></p>
+      </div>
+      <div class="rounded-lg border ui-border p-3 ui-copy">
+        <p class="ui-help">Filtered by blockers</p>
+        <p class="ui-text-primary font-semibold"><%= diagnostics[:rows_filtered_blocked].to_i %></p>
+      </div>
+      <div class="rounded-lg border ui-border p-3 ui-copy">
+        <p class="ui-help">Watched mode</p>
+        <p class="ui-text-primary font-semibold"><%= candidate_watched_match_mode_label(@watched_match_mode) %></p>
+      </div>
+    </div>
   <% end %>
 
   <%= render Ui::PanelComponent.new(
     title: "#{candidate_scope_label(@scope)} Results",
-    subtitle: "#{@items.size} item(s) shown",
+    subtitle: "#{@items.size} item(s) shown · #{candidate_watched_match_mode_label(@watched_match_mode)}",
     padding: :lg
   ) do %>
     <% if @items.any? %>
@@ -180,10 +207,22 @@
         <p class="ui-help mt-4">Additional results exist. Refine filters to narrow this page.</p>
       <% end %>
     <% else %>
+      <% diagnostics = (@candidate_diagnostics || {}).with_indifferent_access %>
+      <% watched_filtered = diagnostics[:rows_filtered_unwatched].to_i %>
+      <% blocked_filtered = diagnostics[:rows_filtered_blocked].to_i %>
+      <% watched_prefilter_applied = ActiveModel::Type::Boolean.new.cast(diagnostics[:watched_prefilter_applied]) %>
+      <% empty_message = "Try a different scope, include blocked items, or run sync to refresh inventory." %>
+      <% if watched_filtered.positive? %>
+        <% empty_message = "No rows matched the watched filter (#{candidate_watched_match_mode_label(@watched_match_mode)}). Try selecting fewer users or switch watched match mode." %>
+      <% elsif watched_prefilter_applied && diagnostics[:rows_scanned].to_i.zero? %>
+        <% empty_message = "Strict watched prefiltering removed all rows before scoring. Try fewer users or switch watched match mode to “Any selected user”." %>
+      <% elsif blocked_filtered.positive? %>
+        <% empty_message = "Rows matched watched criteria, but blocker guardrails removed them. Enable “Include blocked candidates” to inspect why." %>
+      <% end %>
       <%= render Ui::InlineAlertComponent.new(
         kind: :info,
         title: "No candidates available",
-        message: "Try a different scope, include blocked items, or run sync to refresh inventory."
+        message: empty_message
       ) %>
     <% end %>
   <% end %>

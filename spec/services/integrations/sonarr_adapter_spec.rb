@@ -45,7 +45,12 @@ RSpec.describe Integrations::SonarrAdapter, type: :service do
     files = adapter.fetch_episode_files(series_id: 101)
 
     expect(series.first).to include(sonarr_series_id: 101, title: "Example Show")
-    expect(episodes.first).to include(sonarr_episode_id: 5001, season_number: 1, duration_ms: 3_000_000)
+    expect(episodes.first).to include(
+      sonarr_episode_id: 5001,
+      episode_file_id: 9001,
+      season_number: 1,
+      duration_ms: 3_000_000
+    )
     expect(files.first).to include(arr_file_id: 9001, sonarr_episode_id: 5001, size_bytes: 734_003_200)
     stubs.verify_stubbed_calls
   end

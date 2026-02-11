@@ -235,10 +235,17 @@ module Sync
         integration_id: integration.id,
         sonarr_episode_id: episode_rows.map { |row| row.fetch(:sonarr_episode_id) }
       ).pluck(:sonarr_episode_id, :id).to_h
+      episode_source_ids_by_file = episode_rows.each_with_object({}) do |episode_row, index|
+        episode_file_id = episode_row[:episode_file_id].to_i
+        next unless episode_file_id.positive?
+
+        index[episode_file_id] = episode_row.fetch(:sonarr_episode_id)
+      end
 
       now = Time.current
       payload = file_rows.filter_map do |row|
-        episode_id = episode_ids_by_source[row[:sonarr_episode_id]]
+        source_episode_id = row[:sonarr_episode_id] || episode_source_ids_by_file[row.fetch(:arr_file_id)]
+        episode_id = episode_ids_by_source[source_episode_id]
         next if episode_id.blank?
 
         {

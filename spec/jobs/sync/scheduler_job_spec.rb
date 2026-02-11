@@ -2,6 +2,13 @@ require "rails_helper"
 
 # rubocop:disable RSpec/ExampleLength
 RSpec.describe Sync::SchedulerJob, type: :job do
+  let(:recovery_call_result) { Sync::RecoverStaleRuns::Result.new(stale_run_ids: [], requeued_run_ids: []) }
+  let(:recovery_service) { instance_double(Sync::RecoverStaleRuns, call: recovery_call_result) }
+
+  before do
+    allow(Sync::RecoverStaleRuns).to receive(:new).and_return(recovery_service)
+  end
+
   it "does not trigger when sync is disabled" do
     allow(AppSetting).to receive(:db_value_for).with("sync_enabled").and_return(false)
     allow(AppSetting).to receive(:db_value_for).with("sync_interval_minutes").and_return(30)
@@ -24,6 +31,11 @@ RSpec.describe Sync::SchedulerJob, type: :job do
       trigger: "scheduler",
       correlation_id: kind_of(String),
       actor: nil
+    )
+    expect(Sync::RecoverStaleRuns).to have_received(:new).with(
+      correlation_id: kind_of(String),
+      actor: nil,
+      enqueue_replacement: true
     )
   end
 
@@ -48,6 +60,19 @@ RSpec.describe Sync::SchedulerJob, type: :job do
     allow(AppSetting).to receive(:db_value_for).with("sync_interval_minutes").and_return(30)
     SyncRun.create!(status: "running", trigger: "manual", started_at: Time.current)
     allow(Sync::TriggerRun).to receive(:new)
+
+    described_class.perform_now
+
+    expect(Sync::TriggerRun).not_to have_received(:new)
+  end
+
+  it "does not trigger when recovery enqueues a replacement run" do
+    allow(AppSetting).to receive(:db_value_for).with("sync_enabled").and_return(true)
+    allow(AppSetting).to receive(:db_value_for).with("sync_interval_minutes").and_return(30)
+    allow(Sync::TriggerRun).to receive(:new)
+    allow(recovery_service).to receive(:call).and_return(
+      Sync::RecoverStaleRuns::Result.new(stale_run_ids: [ 1001 ], requeued_run_ids: [ 1002 ])
+    )
 
     described_class.perform_now
 

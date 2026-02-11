@@ -261,5 +261,51 @@ RSpec.describe "Api::V1::Integrations", type: :request do
       expect(Integration.find_by(id: integration.id)).to be_nil
     end
   end
+
+  describe "POST /api/v1/integrations/:id/reset_history_state" do
+    before { sign_in_operator! }
+
+    it "clears tautulli history sync state after re-authentication" do
+      integration = Integration.create!(
+        kind: "tautulli",
+        name: "Tautulli Resettable",
+        base_url: "https://tautulli.reset.local",
+        api_key: "secret",
+        verify_ssl: true,
+        settings_json: {
+          "history_sync_state" => {
+            "watermark_id" => 555,
+            "recent_ids" => [ 555, 556 ]
+          }
+        }
+      )
+      reauthenticate!
+
+      post "/api/v1/integrations/#{integration.id}/reset_history_state", as: :json
+
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body["reset"]).to be(true)
+      expect(integration.reload.settings_json).not_to have_key("history_sync_state")
+    end
+
+    it "returns validation error for non-tautulli integrations" do
+      integration = Integration.create!(
+        kind: "radarr",
+        name: "Radarr Not Resettable",
+        base_url: "https://radarr.not-reset.local",
+        api_key: "secret",
+        verify_ssl: true
+      )
+      reauthenticate!
+
+      post "/api/v1/integrations/#{integration.id}/reset_history_state", as: :json
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.parsed_body.dig("error", "code")).to eq("validation_failed")
+      expect(response.parsed_body.dig("error", "details", "fields", "integration")).to include(
+        "history state reset is only available for tautulli integrations"
+      )
+    end
+  end
 end
 # rubocop:enable RSpec/ExampleLength

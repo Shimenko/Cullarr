@@ -1,6 +1,6 @@
 class IntegrationsController < ApplicationController
-  before_action :set_integration, only: %i[update destroy check]
-  before_action :require_recent_reauthentication_for_mutation!, only: %i[create update destroy]
+  before_action :set_integration, only: %i[update destroy check reset_history_state]
+  before_action :require_recent_reauthentication_for_mutation!, only: %i[create update destroy reset_history_state]
 
   def create
     integration = Integration.new(create_update_attributes)
@@ -76,6 +76,36 @@ class IntegrationsController < ApplicationController
     redirect_to settings_path, notice: "Integration check completed: #{result[:status]}."
   rescue Integrations::Error => e
     redirect_to settings_path, alert: "Integration check failed: #{e.message}"
+  end
+
+  def reset_history_state
+    unless @integration.tautulli?
+      redirect_to settings_path, alert: "History state reset is only available for Tautulli integrations."
+      return
+    end
+
+    prior_state = @integration.settings_json["history_sync_state"]
+    if prior_state.blank?
+      redirect_to settings_path, notice: "History sync state is already clear."
+      return
+    end
+
+    settings = @integration.settings_json.deep_dup
+    settings.delete("history_sync_state")
+    @integration.update!(settings_json: settings)
+
+    AuditEvents::Recorder.record!(
+      event_name: "cullarr.integration.updated",
+      correlation_id: request.request_id,
+      actor: current_operator,
+      subject: @integration,
+      payload: {
+        action: "history_state_reset",
+        prior_history_state: prior_state
+      }
+    )
+
+    redirect_to settings_path, notice: "Tautulli history sync state has been reset."
   end
 
   private

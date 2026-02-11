@@ -1,8 +1,8 @@
 module Api
   module V1
     class IntegrationsController < BaseController
-      before_action :set_integration, only: %i[update destroy check]
-      before_action :require_recent_reauthentication!, only: %i[create update destroy]
+      before_action :set_integration, only: %i[update destroy check reset_history_state]
+      before_action :require_recent_reauthentication!, only: %i[create update destroy reset_history_state]
 
       def index
         render json: { integrations: Integration.order(:name).map(&:as_api_json) }
@@ -55,6 +55,24 @@ module Api
         render_api_error(code: "rate_limited", message: e.message, status: :too_many_requests)
       rescue Integrations::ContractMismatchError => e
         render_api_error(code: "integration_contract_mismatch", message: e.message, status: :bad_gateway)
+      end
+
+      def reset_history_state
+        unless @integration.tautulli?
+          return render_validation_error(fields: { integration: [ "history state reset is only available for tautulli integrations" ] })
+        end
+
+        prior_state = @integration.settings_json["history_sync_state"]
+        if prior_state.blank?
+          return render json: { integration: @integration.as_api_json, reset: false, reason: "already_clear" }
+        end
+
+        settings = @integration.settings_json.deep_dup
+        settings.delete("history_sync_state")
+        @integration.update!(settings_json: settings)
+        record_integration_event("cullarr.integration.updated", @integration, action: "history_state_reset")
+
+        render json: { integration: @integration.as_api_json, reset: true }
       end
 
       private

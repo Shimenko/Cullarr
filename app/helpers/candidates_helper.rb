@@ -7,6 +7,12 @@ module CandidatesHelper
   ].freeze
 
   SCOPE_LABELS = SCOPE_OPTIONS.to_h { |label, value| [ value, label ] }.freeze
+  WATCHED_MATCH_MODE_OPTIONS = [
+    [ "No selected users watched", "none" ],
+    [ "All selected users (strict)", "all" ],
+    [ "Any selected user", "any" ]
+  ].freeze
+  WATCHED_MATCH_MODE_LABELS = WATCHED_MATCH_MODE_OPTIONS.to_h { |label, value| [ value, label ] }.freeze
 
   FLAG_LABELS = {
     "path_excluded" => "Excluded Path",
@@ -36,6 +42,14 @@ module CandidatesHelper
 
   def candidate_scope_label(scope)
     SCOPE_LABELS.fetch(scope.to_s, scope.to_s.humanize)
+  end
+
+  def candidate_watched_match_mode_options
+    WATCHED_MATCH_MODE_OPTIONS
+  end
+
+  def candidate_watched_match_mode_label(mode)
+    WATCHED_MATCH_MODE_LABELS.fetch(mode.to_s, mode.to_s.humanize)
   end
 
   def candidate_flag_label(flag)

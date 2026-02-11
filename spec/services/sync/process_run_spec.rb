@@ -93,5 +93,26 @@ RSpec.describe Sync::ProcessRun, type: :service do
     expect(follow_up_run.status).to eq("queued")
     expect(follow_up_run.trigger).to eq("manual")
   end
+
+  it "records run_skipped when a non-queued run is picked up" do
+    sync_run = SyncRun.create!(status: "running", trigger: "manual", started_at: 2.minutes.ago)
+
+    described_class.new(sync_run:, correlation_id: "corr-process-skipped").call
+
+    skipped_event = AuditEvent.find_by!(
+      event_name: "cullarr.sync.run_skipped",
+      subject_type: "SyncRun",
+      subject_id: sync_run.id
+    )
+    payload = skipped_event.payload_json.with_indifferent_access
+
+    expect(sync_run.reload.status).to eq("running")
+    expect(payload).to include(
+      sync_run_id: sync_run.id,
+      trigger: "manual",
+      status: "running",
+      reason: "not_queued"
+    )
+  end
 end
 # rubocop:enable RSpec/ExampleLength

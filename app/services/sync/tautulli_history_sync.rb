@@ -6,6 +6,7 @@ module Sync
 
     HISTORY_OVERLAP_ROWS = 100
     RECENT_HISTORY_MEMORY = 1000
+    METADATA_RECONCILIATION_LIMIT = 250
 
     def initialize(sync_run:, correlation_id:, phase_progress: nil)
       @sync_run = sync_run
@@ -19,6 +20,9 @@ module Sync
         rows_fetched: 0,
         rows_processed: 0,
         rows_skipped: 0,
+        rows_skipped_overlap: 0,
+        rows_skipped_missing_user: 0,
+        rows_skipped_missing_watchable: 0,
         rows_invalid: 0,
         rows_ambiguous: 0,
         watch_stats_upserted: 0
@@ -31,24 +35,37 @@ module Sync
 
         adapter = Integrations::TautulliAdapter.new(integration:)
         page_size = integration.tautulli_history_page_size
-        rows, state = incremental_history_rows(adapter:, integration:)
+        rows = incremental_history_rows(adapter:, integration:)
         counts[:rows_fetched] += rows[:fetched]
-        upsert_result = upsert_watch_stats!(rows[:process])
+        counts[:rows_skipped_overlap] += rows[:skipped_overlap]
+        upsert_result = upsert_watch_stats!(rows[:process], adapter:)
         counts[:rows_processed] += upsert_result[:rows_processed]
         counts[:rows_invalid] += rows[:invalid]
-        counts[:rows_skipped] += rows[:skipped] + upsert_result[:rows_skipped]
+        counts[:rows_skipped_missing_user] += upsert_result[:rows_skipped_missing_user]
+        counts[:rows_skipped_missing_watchable] += upsert_result[:rows_skipped_missing_watchable]
+        counts[:rows_skipped] += rows[:invalid] + rows[:skipped_overlap] + upsert_result[:rows_skipped]
         counts[:rows_ambiguous] += upsert_result[:rows_ambiguous]
         counts[:watch_stats_upserted] += upsert_result[:watch_stats_upserted]
         phase_progress&.advance!(rows[:process].size + rows[:skipped])
 
-        persist_history_state!(integration:, state:)
+        persist_history_state!(
+          integration: integration,
+          state: next_history_state(
+            sync_state: rows[:sync_state],
+            max_seen_history_id: rows[:max_seen_history_id],
+            processed_history_ids: upsert_result[:processed_history_ids]
+          )
+        )
 
         log_info(
           "sync_phase_worker_integration_complete phase=tautulli_history integration_id=#{integration.id} " \
           "page_size=#{page_size} " \
           "rows_fetched=#{counts[:rows_fetched]} rows_processed=#{counts[:rows_processed]} " \
           "rows_invalid=#{counts[:rows_invalid]} " \
-          "rows_skipped=#{counts[:rows_skipped]} rows_ambiguous=#{counts[:rows_ambiguous]} " \
+          "rows_skipped=#{counts[:rows_skipped]} rows_skipped_overlap=#{counts[:rows_skipped_overlap]} " \
+          "rows_skipped_missing_user=#{counts[:rows_skipped_missing_user]} " \
+          "rows_skipped_missing_watchable=#{counts[:rows_skipped_missing_watchable]} " \
+          "rows_ambiguous=#{counts[:rows_ambiguous]} " \
           "watch_stats_upserted=#{counts[:watch_stats_upserted]}"
         )
       end
@@ -63,14 +80,34 @@ module Sync
 
     def incremental_history_rows(adapter:, integration:)
       sync_state = history_sync_state(integration)
-      lower_bound = [ sync_state[:watermark_id] - HISTORY_OVERLAP_ROWS, 0 ].max
+      rows = collect_incremental_history_rows(adapter:, integration:, sync_state:)
+      return rows unless stale_history_state?(rows:, sync_state:)
+
+      log_info(
+        "sync_phase_worker_history_state_reset integration_id=#{integration.id} " \
+        "previous_max_seen_history_id=#{sync_state[:max_seen_history_id]} " \
+        "observed_max_history_id=#{rows[:observed_max_history_id]}"
+      )
+      reset_state = { watermark_id: 0, max_seen_history_id: 0, recent_ids: [] }
+      refreshed_rows = collect_incremental_history_rows(adapter:, integration:, sync_state: reset_state)
+      refreshed_rows[:sync_state] = reset_state
+      refreshed_rows
+    end
+
+    def collect_incremental_history_rows(adapter:, integration:, sync_state:)
+      window_anchor = [ sync_state[:watermark_id], sync_state[:max_seen_history_id] ].max
+      lower_bound = [ window_anchor - HISTORY_OVERLAP_ROWS, 0 ].max
       recent_ids = sync_state[:recent_ids].to_set
+      seen_history_ids = Set.new
       page_size = integration.tautulli_history_page_size
 
       start = 0
       fetched_rows = 0
       skipped_rows = 0
+      skipped_overlap_rows = 0
       invalid_rows = 0
+      max_seen_history_id = sync_state[:max_seen_history_id]
+      observed_max_history_id = 0
       rows_to_process = []
 
       loop do
@@ -91,39 +128,48 @@ module Sync
         invalid_rows += page.fetch(:rows_skipped_invalid, 0).to_i
         page_rows.each do |row|
           history_id = row.fetch(:history_id).to_i
-          if history_id <= lower_bound || recent_ids.include?(history_id)
+          observed_max_history_id = [ observed_max_history_id, history_id ].max
+          max_seen_history_id = [ max_seen_history_id, history_id ].max
+          if seen_history_ids.include?(history_id) || history_id <= lower_bound || recent_ids.include?(history_id)
             skipped_rows += 1
+            skipped_overlap_rows += 1
             next
           end
 
+          seen_history_ids << history_id
           rows_to_process << row
         end
 
-        break if page_rows.any? && page_rows.all? { |row| row.fetch(:history_id).to_i <= lower_bound }
         break unless page.fetch(:has_more)
 
         start = page.fetch(:next_start)
       end
 
       rows_to_process.sort_by! { |row| row.fetch(:history_id).to_i }
-      processed_ids = rows_to_process.map { |row| row.fetch(:history_id).to_i }
       {
         fetched: fetched_rows,
         invalid: invalid_rows,
         skipped: skipped_rows,
-        process: rows_to_process
-      }.yield_self do |rows|
-        [
-          rows,
-          {
-            watermark_id: [ sync_state[:watermark_id], processed_ids.max.to_i ].max,
-            recent_ids: (sync_state[:recent_ids] + processed_ids).uniq.last(RECENT_HISTORY_MEMORY)
-          }
-        ]
-      end
+        skipped_overlap: skipped_overlap_rows,
+        process: rows_to_process,
+        sync_state: sync_state,
+        max_seen_history_id: max_seen_history_id,
+        observed_max_history_id: observed_max_history_id
+      }
     end
 
-    def upsert_watch_stats!(rows)
+    def stale_history_state?(rows:, sync_state:)
+      prior_max = sync_state[:max_seen_history_id].to_i
+      return false if prior_max <= 0
+      return false if rows[:fetched].to_i <= 0
+      return false if rows[:process].any?
+      return false if rows[:observed_max_history_id].to_i <= 0
+
+      window_anchor = [ sync_state[:watermark_id], prior_max ].max
+      rows[:observed_max_history_id].to_i < [ window_anchor - HISTORY_OVERLAP_ROWS, 0 ].max
+    end
+
+    def upsert_watch_stats!(rows, adapter:)
       return empty_upsert_result if rows.empty?
 
       watched_mode = AppSetting.db_value_for("watched_mode")
@@ -131,6 +177,7 @@ module Sync
       in_progress_min_offset_ms = AppSetting.db_value_for("in_progress_min_offset_ms").to_i
 
       watchable_lookup = load_watchables(rows)
+      watchable_lookup = reconcile_missing_watchables!(rows:, watchable_lookup:, adapter:)
       plex_users = PlexUser.where(tautulli_user_id: rows.map { |row| row.fetch(:tautulli_user_id) }.uniq).index_by(&:tautulli_user_id)
 
       aggregates, row_outcomes = aggregate_rows(rows, plex_users:, watchable_lookup:)
@@ -185,9 +232,11 @@ module Sync
       row_outcomes = empty_upsert_result
 
       rows.each do |row|
+        history_id = row.fetch(:history_id).to_i
         plex_user = plex_users[row.fetch(:tautulli_user_id).to_i]
         if plex_user.blank?
           row_outcomes[:rows_skipped] += 1
+          row_outcomes[:rows_skipped_missing_user] += 1
           next
         end
 
@@ -199,6 +248,7 @@ module Sync
 
         if watchable.blank?
           row_outcomes[:rows_skipped] += 1
+          row_outcomes[:rows_skipped_missing_watchable] += 1
           next
         end
 
@@ -215,12 +265,15 @@ module Sync
           watchable_duration_ms: watchable.respond_to?(:duration_ms) ? watchable.duration_ms : nil
         }
         row_outcomes[:rows_processed] += 1
+        row_outcomes[:processed_history_ids] << history_id
         aggregate[:play_count] += [ row[:play_count].to_i, 1 ].max
         aggregate[:last_watched_at] = [ aggregate[:last_watched_at], row[:viewed_at] ].compact.max
         aggregate[:last_seen_at] = [ aggregate[:last_seen_at], row[:viewed_at] ].compact.max
         aggregate[:max_view_offset_ms] = [ aggregate[:max_view_offset_ms], row[:view_offset_ms].to_i ].max
         aggregate[:duration_ms] = [ aggregate[:duration_ms], row[:duration_ms] ].compact.max
       end
+
+      row_outcomes[:processed_history_ids].uniq!
 
       [ aggregates, row_outcomes ]
     end
@@ -273,15 +326,134 @@ module Sync
       end
     end
 
+    def reconcile_missing_watchables!(rows:, watchable_lookup:, adapter:)
+      unresolved_rows = rows.select { |row| watchable_for(row:, lookup: watchable_lookup).blank? }
+      unresolved_keys = unresolved_rows
+        .map { |row| [ row.fetch(:media_type), row.fetch(:plex_rating_key).to_s ] }
+        .reject { |(_, rating_key)| rating_key.blank? }
+        .uniq
+        .first(METADATA_RECONCILIATION_LIMIT)
+      return watchable_lookup if unresolved_keys.empty?
+
+      metadata_by_key = {}
+      resolved_movie_keys = Set.new
+      resolved_episode_keys = Set.new
+
+      unresolved_keys.each do |media_type, rating_key|
+        metadata = metadata_by_key[rating_key] ||= fetch_metadata_for_rating_key(adapter:, rating_key:)
+        next if metadata.blank?
+
+        resolved = if media_type == "movie"
+          reconcile_movie_watchable!(rating_key:, metadata:)
+        else
+          reconcile_episode_watchable!(rating_key:, metadata:)
+        end
+        next unless resolved
+
+        (media_type == "movie" ? resolved_movie_keys : resolved_episode_keys) << rating_key
+      end
+
+      if resolved_movie_keys.any?
+        watchable_lookup[:movies].merge!(grouped_watchables_by_key(Movie, resolved_movie_keys.to_a))
+      end
+      if resolved_episode_keys.any?
+        watchable_lookup[:episodes].merge!(grouped_watchables_by_key(Episode, resolved_episode_keys.to_a))
+      end
+
+      watchable_lookup
+    end
+
+    def fetch_metadata_for_rating_key(adapter:, rating_key:)
+      adapter.fetch_metadata(rating_key:)
+    rescue Integrations::Error => error
+      log_info(
+        "sync_phase_worker_metadata_lookup_failed phase=tautulli_history " \
+        "rating_key=#{rating_key} error=#{error.class.name}"
+      )
+      nil
+    end
+
+    def reconcile_movie_watchable!(rating_key:, metadata:)
+      watchable = uniquely_matched_watchable(
+        relation: Movie.all,
+        external_ids: metadata.fetch(:external_ids, {}),
+        type: :movie
+      )
+      return false if watchable.blank?
+      return false if watchable.plex_rating_key.present? && watchable.plex_rating_key != rating_key
+
+      persist_watchable_metadata!(watchable:, rating_key:, metadata:)
+    end
+
+    def reconcile_episode_watchable!(rating_key:, metadata:)
+      watchable = uniquely_matched_watchable(
+        relation: Episode.all,
+        external_ids: metadata.fetch(:external_ids, {}),
+        type: :episode
+      )
+      return false if watchable.blank?
+      return false if watchable.plex_rating_key.present? && watchable.plex_rating_key != rating_key
+
+      persist_watchable_metadata!(watchable:, rating_key:, metadata:)
+    end
+
+    def uniquely_matched_watchable(relation:, external_ids:, type:)
+      matches = []
+      if type == :movie
+        matches.concat(relation.where(tmdb_id: external_ids[:tmdb_id])) if external_ids[:tmdb_id].present?
+        matches.concat(relation.where(imdb_id: external_ids[:imdb_id])) if external_ids[:imdb_id].present?
+      else
+        matches.concat(relation.where(tvdb_id: external_ids[:tvdb_id])) if external_ids[:tvdb_id].present?
+        matches.concat(relation.where(imdb_id: external_ids[:imdb_id])) if external_ids[:imdb_id].present?
+        matches.concat(relation.where(tmdb_id: external_ids[:tmdb_id])) if external_ids[:tmdb_id].present?
+      end
+      matches.uniq!(&:id)
+      return nil unless matches.one?
+
+      matches.first
+    end
+
+    def persist_watchable_metadata!(watchable:, rating_key:, metadata:)
+      attrs = {}
+      attrs[:plex_rating_key] = rating_key if watchable.plex_rating_key.blank?
+      attrs[:plex_guid] = metadata[:plex_guid] if watchable.plex_guid.blank? && metadata[:plex_guid].present?
+      attrs[:duration_ms] = metadata[:duration_ms] if watchable.duration_ms.blank? && metadata[:duration_ms].present?
+      return false if attrs.empty?
+
+      watchable.update!(attrs)
+      true
+    end
+
     def empty_upsert_result
-      { rows_processed: 0, rows_skipped: 0, rows_ambiguous: 0, watch_stats_upserted: 0 }
+      {
+        rows_processed: 0,
+        rows_skipped: 0,
+        rows_skipped_missing_user: 0,
+        rows_skipped_missing_watchable: 0,
+        rows_ambiguous: 0,
+        watch_stats_upserted: 0,
+        processed_history_ids: []
+      }
     end
 
     def history_sync_state(integration)
       raw = integration.settings_json["history_sync_state"]
+      watermark_id = raw&.dig("watermark_id").to_i
+      max_seen_history_id = [ raw&.dig("max_seen_history_id").to_i, watermark_id ].max
       {
-        watermark_id: raw&.dig("watermark_id").to_i,
+        watermark_id: watermark_id,
+        max_seen_history_id: max_seen_history_id,
         recent_ids: Array(raw&.dig("recent_ids")).map(&:to_i)
+      }
+    end
+
+    def next_history_state(sync_state:, max_seen_history_id:, processed_history_ids:)
+      processed_max = processed_history_ids.max.to_i
+      watermark_id = [ sync_state[:watermark_id], processed_max ].max
+      {
+        watermark_id: watermark_id,
+        max_seen_history_id: [ sync_state[:max_seen_history_id], max_seen_history_id.to_i, watermark_id ].max,
+        recent_ids: (sync_state[:recent_ids] + processed_history_ids).uniq.last(RECENT_HISTORY_MEMORY)
       }
     end
 
