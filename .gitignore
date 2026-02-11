@@ -87,6 +87,7 @@ ui-audit-screenshots/
 .local/pki/
 .codex
 /dev-docs/
+/backup/
 .kamal/secrets
 .kamal/secrets.*
 

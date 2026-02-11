@@ -206,6 +206,22 @@ Verification:
 Notes: ...
 ```
 
+Latest recorded drill:
+
+```text
+Date: 2026-02-11
+Environment: local
+Runtime: local-app
+Profile: sqlite
+Backup source: storage/development*.sqlite3
+Restore target: storage/development*.sqlite3
+Verification:
+- marker row before backup = 0
+- marker row after mutation = 1
+- marker row after restore = 0
+Notes: restore rollback validated with sqlite role files while app was stopped.
+```
+
 ## Common mistakes
 
 - backing up only one DB role in Postgres mode

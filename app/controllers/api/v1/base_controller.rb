@@ -4,6 +4,7 @@ module Api
       prepend_before_action :set_api_version_header
       rescue_from StandardError, with: :handle_internal_error
       rescue_from ActionController::ParameterMissing, with: :handle_parameter_missing
+      rescue_from ActionController::InvalidAuthenticityToken, with: :handle_csrf_invalid
 
       private
 
@@ -39,6 +40,14 @@ module Api
         missing_key = "base" if missing_key.blank?
 
         render_validation_error(fields: { missing_key => [ "is required" ] })
+      end
+
+      def handle_csrf_invalid(_error)
+        render_api_error(
+          code: "csrf_invalid",
+          message: "CSRF verification failed.",
+          status: :forbidden
+        )
       end
 
       def handle_internal_error(error)

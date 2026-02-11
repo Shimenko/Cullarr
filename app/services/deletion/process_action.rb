@@ -210,6 +210,7 @@ module Deletion
       attributes = { status: status }
       attributes[:finished_at] = finished_at if finished_at.present?
       deletion_action.update!(attributes)
+      log_action_status!(status:)
       record_stage_event(status:)
       Deletion::RunStatusBroadcaster.broadcast_action(deletion_action:, correlation_id:)
     end
@@ -221,6 +222,7 @@ module Deletion
         error_message: error_message.to_s.truncate(500),
         finished_at: Time.current
       )
+      log_action_failed!(error_code:, error_message:)
       Deletion::RunStatusBroadcaster.broadcast_action(deletion_action:, correlation_id:)
     end
 
@@ -236,6 +238,7 @@ module Deletion
       json = deletion_action.stage_timestamps_json.deep_dup
       json[stage] ||= Time.current.iso8601
       deletion_action.update!(stage_timestamps_json: json)
+      log_action_stage!(stage:)
       record_stage_event(status: deletion_action.status, stage: stage)
     end
 
@@ -310,6 +313,48 @@ module Deletion
         row.arr_tag_id = tag_id
       end
       tag_id
+    end
+
+    def log_action_stage!(stage:)
+      Rails.logger.info(
+        [
+          "deletion_action_stage",
+          "deletion_run_id=#{deletion_run.id}",
+          "deletion_action_id=#{deletion_action.id}",
+          "media_file_id=#{deletion_action.media_file_id}",
+          "stage=#{stage}",
+          "status=#{deletion_action.status}",
+          "correlation_id=#{correlation_id}"
+        ].join(" ")
+      )
+    end
+
+    def log_action_status!(status:)
+      Rails.logger.info(
+        [
+          "deletion_action_status",
+          "deletion_run_id=#{deletion_run.id}",
+          "deletion_action_id=#{deletion_action.id}",
+          "media_file_id=#{deletion_action.media_file_id}",
+          "status=#{status}",
+          "correlation_id=#{correlation_id}"
+        ].join(" ")
+      )
+    end
+
+    def log_action_failed!(error_code:, error_message:)
+      Rails.logger.warn(
+        [
+          "deletion_action_failed",
+          "deletion_run_id=#{deletion_run.id}",
+          "deletion_action_id=#{deletion_action.id}",
+          "media_file_id=#{deletion_action.media_file_id}",
+          "status=#{deletion_action.status}",
+          "error_code=#{error_code}",
+          "error_message=#{error_message.to_s.truncate(200)}",
+          "correlation_id=#{correlation_id}"
+        ].join(" ")
+      )
     end
 
     def file_still_present_upstream?

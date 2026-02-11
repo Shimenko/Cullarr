@@ -57,7 +57,7 @@ RSpec.describe "CandidatesListing", type: :system do
         path_canonical: "/media/system/candidates-#{movie.id}.mkv",
         size_bytes: 1.gigabyte
       )
-      WatchStat.create!(plex_user: user, watchable: movie, play_count: 1)
+      WatchStat.create!(plex_user: user, watchable: movie, play_count: 0)
     end
 
     blocked_watch_stat = WatchStat.find_by!(plex_user: user, watchable: blocked_movie)

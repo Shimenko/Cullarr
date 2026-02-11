@@ -1,6 +1,7 @@
 class ApplicationController < ActionController::Base
   before_action :set_correlation_id
   before_action :require_login
+  rescue_from ActionController::InvalidAuthenticityToken, with: :handle_invalid_authenticity_token
 
   helper_method :current_operator, :operator_signed_in?, :reauthenticated_recently?
 
@@ -62,5 +63,18 @@ class ApplicationController < ActionController::Base
     minutes.minutes
   rescue ActiveRecord::ActiveRecordError, KeyError
     15.minutes
+  end
+
+  def handle_invalid_authenticity_token
+    @correlation_id ||= request.request_id
+    response.set_header("X-Correlation-Id", @correlation_id)
+
+    if request.format.json?
+      render json: error_envelope(code: "csrf_invalid", message: "CSRF verification failed."),
+             status: :forbidden
+    else
+      reset_session
+      redirect_to new_session_path, alert: "Your session has expired. Sign in and try again."
+    end
   end
 end

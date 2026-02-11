@@ -126,6 +126,12 @@ Setting `retention_audit_events_days` to `0` requires:
 
 If either is missing, the update is rejected.
 
+Retention execution behavior:
+- pruning runs in production via `Retention::PruneJob` (scheduled in `config/recurring.yml`)
+- only terminal run rows are pruned (`success`, `failed`, `canceled`, and `partial_failure` for deletion runs)
+- in-flight rows (`queued`, `running`) are never pruned
+- completion is logged as `retention_prune_completed` with deleted counts
+
 ## Environment-managed keys shown in effective settings
 
 These appear in settings responses but are immutable there. Change them in environment variables.

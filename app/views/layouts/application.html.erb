@@ -15,7 +15,7 @@
     <%# Enable PWA manifest for installable apps (make sure to enable in config/routes.rb too!) %>
     <%#= tag.link rel: "manifest", href: pwa_manifest_path(format: :json) %>
 
-    <script>
+    <script nonce="<%= content_security_policy_nonce %>">
       (() => {
         const DARK_CLASS = "theme-signal-dark"
         const LIGHT_CLASS = "theme-signal-light"

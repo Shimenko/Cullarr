@@ -102,7 +102,7 @@ RSpec.describe "Api::V1::SyncRuns", type: :request do
       expect(response).to have_http_status(:ok)
       expect(response.parsed_body.dig("sync_runs", 0, "id")).to eq(newer_run.id)
       expect(response.parsed_body.dig("sync_runs", 1, "id")).to eq(older_run.id)
-      expect(response.parsed_body.dig("sync_runs", 0, "progress", "total_phases")).to eq(7)
+      expect(response.parsed_body.dig("sync_runs", 0, "progress", "total_phases")).to eq(8)
       expect(response.parsed_body.dig("page", "next_cursor")).to be_nil
     end
 

@@ -21,6 +21,7 @@ This page translates Cullarr error codes and gives a practical next step for eac
 |---------------------|-------------------------------------------------------------------------|--------------------------------------------|
 | `unauthenticated`   | You are not signed in or session is missing/expired.                    | Sign in at `/session/new` and retry.       |
 | `forbidden`         | You are signed in, but this action is blocked (often re-auth required). | Re-authenticate and retry.                 |
+| `csrf_invalid`      | CSRF token is missing or invalid for a mutating browser request.         | Refresh the page and retry the action.     |
 | `validation_failed` | Request fields are missing/invalid.                                     | Read `details.fields`, fix payload, retry. |
 | `not_found`         | Target record does not exist.                                           | Verify ID/path and retry.                  |
 | `conflict`          | Request is valid, but current state prevents it.                        | Resolve state conflict, then retry.        |
@@ -59,6 +60,8 @@ This page translates Cullarr error codes and gives a practical next step for eac
 | `guardrail_ambiguous_ownership`    | Ownership across integrations is ambiguous.                                           | Resolve ownership/mapping ambiguity, then retry.                        |
 | `deletion_confirmation_timeout`    | Delete confirmation/resync timed out.                                                 | Retry and check integration health.                                     |
 | `deletion_action_failed`           | Deletion stage failed for another reason.                                             | Inspect run/action details and logs with correlation ID.                |
+| `image_proxy_disallowed_host`      | Requested image host is not in the image-proxy allowlist.                             | Add host to allowlist or use an allowed source URL.                     |
+| `image_proxy_redirect_blocked`     | Image source redirected to a host outside the allowlist.                              | Update upstream URL or allowlist only if intentionally trusted.          |
 
 ### Ambiguity guardrails
 

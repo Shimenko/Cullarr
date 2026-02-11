@@ -32,6 +32,26 @@ Both profiles run:
 
 `db-init` runs `bin/rails db:prepare` before app services start. This prevents two services trying to prepare DB at same time.
 
+## Reverse proxy websocket requirement
+
+Turbo Streams live updates depend on Action Cable websocket upgrades.
+
+If you place Cullarr behind a reverse proxy, ensure websocket headers are forwarded.
+
+Nginx location example:
+
+```nginx
+location /cable {
+  proxy_pass http://127.0.0.1:3000/cable;
+  proxy_http_version 1.1;
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection "upgrade";
+  proxy_set_header Host $host;
+}
+```
+
+Without websocket forwarding, run progress pages still load, but live updates can stall.
+
 ## 1) Start sqlite profile
 
 Copy env file:

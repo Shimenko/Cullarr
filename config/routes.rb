@@ -34,6 +34,8 @@ Rails.application.routes.draw do
 
   namespace :api do
     namespace :v1 do
+      get "image-proxy", to: "image_proxy#show", defaults: { format: :json }
+
       defaults format: :json do
         get "health", to: "health#show"
         resource :settings, only: %i[show update]

@@ -86,7 +86,7 @@ RSpec.describe "CandidatesDeletionWorkflow", type: :system do
       path_canonical: "/media/workflow-movie.mkv",
       size_bytes: 2.gigabytes
     )
-    WatchStat.create!(plex_user: user, watchable: movie, play_count: 1)
+    WatchStat.create!(plex_user: user, watchable: movie, play_count: 0)
 
     visit "/candidates"
     expect(page).to have_css("[data-controller='candidates-workflow'][data-workflow-ready='true']", wait: 3)

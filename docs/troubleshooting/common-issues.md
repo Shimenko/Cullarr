@@ -89,6 +89,17 @@ Compatibility mode behavior:
 - `strict_latest`: unsupported version is blocked
 - `warn_only_read_only`: sync/read can continue with warning, delete support remains disabled
 
+## Image proxy errors (`image_proxy_disallowed_host`, `image_proxy_redirect_blocked`)
+
+What it means:
+- Cullarr blocked the image source host or a redirect target host based on allowlist policy.
+
+What to do:
+1. Verify requested image URL host.
+2. Check `CULLARR_IMAGE_PROXY_ALLOWED_HOSTS`.
+3. If this variable is unset, Cullarr uses integration hosts as defaults.
+4. Restart app services after any `.env` changes.
+
 ## Sync trigger returns `sync_already_running` or `sync_queued_next`
 
 What it means:
@@ -214,6 +225,16 @@ What to do:
 2. Re-authenticate with your current password.
 3. Retry the action.
 
+## API request fails with `csrf_invalid`
+
+What it means:
+- a mutating browser request was sent without a valid CSRF token.
+
+What to do:
+1. Refresh the page and retry.
+2. Sign in again if your session changed.
+3. Avoid replaying stale browser requests from old tabs.
+
 ## Rate limiting and retry behavior
 
 Cullarr already retries integration calls with exponential backoff and jitter.
@@ -237,6 +258,11 @@ Docker logs:
 ```bash
 docker compose --profile <sqlite|postgres> --env-file <env-file> logs -f web worker
 ```
+
+Retention prune and run observability logs to look for:
+- `retention_prune_completed`
+- `sync_run_*` entries with `correlation_id=...`
+- `deletion_run_*` and `deletion_action_*` entries with `correlation_id=...`
 
 Local Rails console:
 

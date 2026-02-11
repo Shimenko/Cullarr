@@ -43,11 +43,19 @@ All API errors use this envelope:
 }
 ```
 
+Mutating API requests without a valid CSRF token return:
+- status: `403`
+- error code: `csrf_invalid`
+
 ## Endpoint index (v1)
 
 ## Health
 
 - `GET /api/v1/health`
+
+## Image proxy
+
+- `GET /api/v1/image-proxy?url=<encoded-image-url>`
 
 ## Settings
 
@@ -183,6 +191,22 @@ Accepted response:
 ```
 
 If another run is active, expect conflict-style behavior such as `sync_already_running` or queued-next behavior.
+
+## `GET /api/v1/image-proxy`
+
+Example query:
+
+```text
+/api/v1/image-proxy?url=https%3A%2F%2Ftautulli.local%2Fimage%2Fposter%2F123
+```
+
+Success response:
+- status `200`
+- response content type mirrors upstream image type (for example `image/png`)
+
+Common error codes:
+- `image_proxy_disallowed_host`
+- `image_proxy_redirect_blocked`
 
 ## `GET /api/v1/candidates`
 

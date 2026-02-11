@@ -8,6 +8,7 @@ module Deletion
     def call
       return deletion_run unless transition_to_running!
 
+      log_run_started!
       record_run_event("cullarr.deletion.run_started", status: "running")
       process_actions!
       finalize_run_status!
@@ -20,6 +21,7 @@ module Deletion
         finished_at: Time.current
       )
       record_run_event("cullarr.deletion.run_failed", status: deletion_run.status, error_code: deletion_run.error_code, error_message: deletion_run.error_message)
+      log_run_failed!(error)
       Deletion::RunStatusBroadcaster.broadcast_run(deletion_run:, correlation_id:)
       deletion_run
     end
@@ -85,6 +87,7 @@ module Deletion
         "cullarr.deletion.run_failed"
       end
       record_run_event(event_name, status: final_status)
+      log_run_terminal!(status: final_status)
       Deletion::RunStatusBroadcaster.broadcast_run(deletion_run:, correlation_id:)
     end
 
@@ -101,6 +104,45 @@ module Deletion
           error_code: error_code,
           error_message: error_message
         }.compact
+      )
+    end
+
+    def log_run_started!
+      Rails.logger.info(
+        [
+          "deletion_run_started",
+          "deletion_run_id=#{deletion_run.id}",
+          "scope=#{deletion_run.scope}",
+          "status=#{deletion_run.status}",
+          "correlation_id=#{correlation_id}"
+        ].join(" ")
+      )
+    end
+
+    def log_run_terminal!(status:)
+      Rails.logger.info(
+        [
+          "deletion_run_terminal",
+          "deletion_run_id=#{deletion_run.id}",
+          "scope=#{deletion_run.scope}",
+          "status=#{status}",
+          "correlation_id=#{correlation_id}"
+        ].join(" ")
+      )
+    end
+
+    def log_run_failed!(error)
+      Rails.logger.error(
+        [
+          "deletion_run_failed",
+          "deletion_run_id=#{deletion_run.id}",
+          "scope=#{deletion_run.scope}",
+          "status=#{deletion_run.status}",
+          "error_class=#{error.class}",
+          "error_code=#{deletion_run.error_code}",
+          "error_message=#{deletion_run.error_message}",
+          "correlation_id=#{correlation_id}"
+        ].join(" ")
       )
     end
   end

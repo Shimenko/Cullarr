@@ -18,13 +18,13 @@ RSpec.describe SyncRun, type: :model do
     it "reports aggregate progress for running runs when only phase completion is known" do
       progress = running_sync_run.progress_snapshot
 
-      expect(progress[:total_phases]).to eq(7)
+      expect(progress[:total_phases]).to eq(8)
       expect(progress[:completed_phases]).to eq(2)
       expect(progress[:current_phase]).to eq("tautulli_history")
       expect(progress[:current_phase_label]).to eq("Tautulli History")
-      expect(progress[:current_phase_index]).to eq(4)
+      expect(progress[:current_phase_index]).to eq(5)
       expect(progress[:current_phase_percent]).to eq(0.0)
-      expect(progress[:percent_complete]).to eq(28.6)
+      expect(progress[:percent_complete]).to eq(25.0)
     end
 
     it "labels each phase with a renderable state" do
@@ -58,7 +58,7 @@ RSpec.describe SyncRun, type: :model do
       progress = sync_run.progress_snapshot
 
       expect(progress[:current_phase_percent]).to eq(25.0)
-      expect(progress[:percent_complete]).to eq(17.9)
+      expect(progress[:percent_complete]).to eq(15.6)
       expect(progress[:phase_states]).to include(
         {
           phase: "radarr_inventory",
