@@ -28,6 +28,8 @@ config/initializers/secret_token.rb
 .env
 .env.*
 !.env.example
+!.env.compose.sqlite.example
+!.env.compose.postgres.example
 
 # Bundler / Ruby environment normalization
 /.bundle
@@ -84,7 +86,7 @@ work-items/
 ui-audit-screenshots/
 .local/pki/
 .codex
-/docs/
+/dev-docs/
 .kamal/secrets
 .kamal/secrets.*
 
