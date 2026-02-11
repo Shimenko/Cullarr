@@ -10,7 +10,8 @@ RSpec.describe Sync::RadarrInventorySync, type: :service do
       name: "Radarr Sync",
       base_url: "https://radarr.sync.local",
       api_key: "secret",
-      verify_ssl: true
+      verify_ssl: true,
+      settings_json: { "radarr_moviefile_fetch_workers" => 1 }
     )
     PathMapping.create!(integration:, from_prefix: "/data", to_prefix: "/mnt")
 
@@ -59,7 +60,8 @@ RSpec.describe Sync::RadarrInventorySync, type: :service do
       name: "Radarr Idempotent",
       base_url: "https://radarr.idempotent.local",
       api_key: "secret",
-      verify_ssl: true
+      verify_ssl: true,
+      settings_json: { "radarr_moviefile_fetch_workers" => 1 }
     )
     PathMapping.create!(integration:, from_prefix: "/data", to_prefix: "/mnt")
 
@@ -118,7 +120,8 @@ RSpec.describe Sync::RadarrInventorySync, type: :service do
       name: "Radarr Root Mapping",
       base_url: "https://radarr.root.local",
       api_key: "secret",
-      verify_ssl: true
+      verify_ssl: true,
+      settings_json: { "radarr_moviefile_fetch_workers" => 1 }
     )
     PathMapping.create!(integration:, from_prefix: "/", to_prefix: "/mnt")
 
@@ -158,7 +161,8 @@ RSpec.describe Sync::RadarrInventorySync, type: :service do
       name: "Radarr MovieFile Fallback",
       base_url: "https://radarr.fallback.local",
       api_key: "secret",
-      verify_ssl: true
+      verify_ssl: true,
+      settings_json: { "radarr_moviefile_fetch_workers" => 1 }
     )
 
     health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
@@ -194,6 +198,77 @@ RSpec.describe Sync::RadarrInventorySync, type: :service do
 
     expect(result).to include(media_files_fetched: 1, media_files_upserted: 1)
     expect(adapter).to have_received(:fetch_movie_files).with(movie_id: 1200)
+  end
+
+  it "emits incremental phase progress updates during fetch and fallback lookups" do
+    integration = Integration.create!(
+      kind: "radarr",
+      name: "Radarr Progress",
+      base_url: "https://radarr.progress.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: { "radarr_moviefile_fetch_workers" => 1 }
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(integration, raise_on_unsupported: true).and_return(health_check)
+
+    adapter = instance_double(Integrations::RadarrAdapter)
+    allow(Integrations::RadarrAdapter).to receive(:new).with(integration:).and_return(adapter)
+    allow(adapter).to receive(:fetch_movies).and_return(
+      [
+        {
+          radarr_movie_id: 3001,
+          title: "Progress A",
+          has_file: true,
+          movie_file_id: 4001,
+          movie_file: nil,
+          metadata: {}
+        },
+        {
+          radarr_movie_id: 3002,
+          title: "Progress B",
+          has_file: true,
+          movie_file_id: 4002,
+          movie_file: nil,
+          metadata: {}
+        }
+      ]
+    )
+    allow(adapter).to receive(:fetch_movie_files).with(movie_id: 3001).and_return(
+      [
+        {
+          arr_file_id: 4001,
+          radarr_movie_id: 3001,
+          path: "/data/movies/progress-a.mkv",
+          size_bytes: 1,
+          quality: {}
+        }
+      ]
+    )
+    allow(adapter).to receive(:fetch_movie_files).with(movie_id: 3002).and_return(
+      [
+        {
+          arr_file_id: 4002,
+          radarr_movie_id: 3002,
+          path: "/data/movies/progress-b.mkv",
+          size_bytes: 1,
+          quality: {}
+        }
+      ]
+    )
+
+    progress_events = []
+    phase_progress = instance_double(Sync::ProgressTracker)
+    allow(phase_progress).to receive(:add_total!) { |count| progress_events << [ :add_total, count ] }
+    allow(phase_progress).to receive(:advance!) { |count| progress_events << [ :advance, count ] }
+
+    described_class.new(sync_run:, correlation_id: "corr-radarr-progress", phase_progress: phase_progress).call
+
+    expect(progress_events).to include([ :add_total, 1 ])
+    expect(progress_events).to include([ :advance, 1 ])
+    expect(progress_events).to include([ :add_total, 2 ])
+    expect(progress_events.count { |event| event == [ :advance, 1 ] }).to be >= 3
   end
 end
 # rubocop:enable RSpec/ExampleLength, RSpec/ReceiveMessages

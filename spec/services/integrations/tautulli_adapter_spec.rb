@@ -40,6 +40,7 @@ RSpec.describe Integrations::TautulliAdapter, type: :service do
           expect(env.params["length"]).to eq("50")
           expect(env.params["order_column"]).to eq("id")
           expect(env.params["order_dir"]).to eq("desc")
+          expect(env.params["include_activity"]).to eq("0")
           [ 200, {}, fixture_json("tautulli/get_history_page.json") ]
         when "get_metadata"
           expect(env.params["rating_key"]).to eq("plex-movie-701")
@@ -58,19 +59,24 @@ RSpec.describe Integrations::TautulliAdapter, type: :service do
     expect(users.first).to include(tautulli_user_id: 10, friendly_name: "Alice", is_hidden: false)
     expect(users.last).to include(tautulli_user_id: 11, is_hidden: true)
     expect(page[:rows].size).to eq(2)
+    expect(page[:raw_rows_count]).to eq(2)
+    expect(page[:rows_skipped_invalid]).to eq(0)
     expect(page[:records_total]).to eq(2)
     expect(page[:rows].first).to include(history_id: 1001, media_type: "movie", plex_rating_key: "plex-movie-701")
     expect(metadata).to include(duration_ms: 7_260_000, plex_guid: "plex://movie/701")
     stubs.verify_stubbed_calls
   end
 
-  it "raises ContractMismatchError for unsupported history media types" do
+  it "skips unsupported history media types" do
     bad_payload = {
       response: {
         result: "success",
         data: {
-          recordsFiltered: 1,
-          data: [ { id: 1, user_id: 2, media_type: "artist", rating_key: "x", date: 1 } ]
+          recordsFiltered: 2,
+          data: [
+            { id: 1, user_id: 2, media_type: "artist", rating_key: "x", date: 1 },
+            { id: 2, user_id: 2, media_type: "movie", rating_key: "movie-2", date: 2 }
+          ]
         }
       }
     }.to_json
@@ -80,9 +86,37 @@ RSpec.describe Integrations::TautulliAdapter, type: :service do
     end
     adapter = described_class.new(integration:, connection: test_connection(stubs))
 
-    expect do
-      adapter.fetch_history_page(start: 0, length: 10, order_column: "id", order_dir: "desc")
-    end.to raise_error(Integrations::ContractMismatchError)
+    page = adapter.fetch_history_page(start: 0, length: 10, order_column: "id", order_dir: "desc")
+
+    expect(page[:rows].size).to eq(1)
+    expect(page[:rows].first[:history_id]).to eq(2)
+    expect(page[:rows_skipped_invalid]).to eq(1)
+  end
+
+  it "uses row_id and reference_id when id is unavailable" do
+    payload = {
+      response: {
+        result: "success",
+        data: {
+          recordsFiltered: 3,
+          data: [
+            { id: nil, row_id: 501, reference_id: nil, user_id: 10, media_type: "movie", rating_key: "m-1", date: 1 },
+            { id: nil, row_id: nil, reference_id: 502, user_id: 10, media_type: "episode", rating_key: "e-1", date: 2 },
+            { id: nil, row_id: nil, reference_id: nil, user_id: 10, media_type: "movie", rating_key: "m-2", date: 3 }
+          ]
+        }
+      }
+    }.to_json
+
+    stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+      stub.get("api/v2") { [ 200, {}, payload ] }
+    end
+    adapter = described_class.new(integration:, connection: test_connection(stubs))
+
+    page = adapter.fetch_history_page(start: 0, length: 10, order_column: "id", order_dir: "desc")
+
+    expect(page[:rows].map { |row| row[:history_id] }).to eq([ 501, 502 ])
+    expect(page[:rows_skipped_invalid]).to eq(1)
   end
 
   it "maps malformed JSON payloads to ContractMismatchError" do

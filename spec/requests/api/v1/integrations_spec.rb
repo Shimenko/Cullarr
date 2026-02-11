@@ -71,7 +71,12 @@ RSpec.describe "Api::V1::Integrations", type: :request do
                base_url: "https://radarr.local",
                api_key: "top-secret",
                verify_ssl: true,
-               settings: { compatibility_mode: "strict_latest" }
+               settings: {
+                 compatibility_mode: "strict_latest",
+                 sonarr_fetch_workers: 7,
+                 radarr_moviefile_fetch_workers: 6,
+                 tautulli_history_page_size: 1200
+               }
              }
            },
            as: :json
@@ -80,6 +85,11 @@ RSpec.describe "Api::V1::Integrations", type: :request do
       payload = response.parsed_body.fetch("integration")
       expect(payload.fetch("api_key_present")).to be(true)
       expect(payload).not_to have_key("api_key")
+      expect(payload.fetch("tuning")).to include(
+        "sonarr_fetch_workers" => 7,
+        "radarr_moviefile_fetch_workers" => 6,
+        "tautulli_history_page_size" => 1200
+      )
     end
 
     it "rejects hosts outside configured integration allow policy" do

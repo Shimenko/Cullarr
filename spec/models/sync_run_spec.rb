@@ -71,6 +71,33 @@ RSpec.describe SyncRun, type: :model do
       )
     end
 
+    it "caps current phase progress below 100 until the phase is complete" do
+      sync_run = described_class.create!(
+        status: "running",
+        trigger: "manual",
+        phase: "sonarr_inventory",
+        phase_counts_json: {
+          Sync::ProgressTracker::PROGRESS_KEY => {
+            "version" => 1,
+            "phases" => {
+              "sonarr_inventory" => { "state" => "current", "total_units" => 10, "processed_units" => 10 }
+            }
+          }
+        }
+      )
+
+      progress = sync_run.progress_snapshot
+
+      expect(progress[:current_phase_percent]).to eq(99.9)
+      expect(progress[:phase_states]).to include(
+        hash_including(
+          phase: "sonarr_inventory",
+          state: "current",
+          percent_complete: 99.9
+        )
+      )
+    end
+
     it "reports 100 percent for successful runs" do
       sync_run = described_class.create!(
         status: "success",

@@ -33,7 +33,8 @@ module Integrations
         start: start,
         length: length,
         order_column: order_column,
-        order_dir: order_dir
+        order_dir: order_dir,
+        include_activity: 0
       )
       params[:since_row_id] = since_row_id if since_row_id.present?
       params[:since] = since_timestamp.to_i if since_timestamp.present?
@@ -41,13 +42,29 @@ module Integrations
       payload = request_json(method: :get, path: "api/v2", params:)
       data = response_data(payload)
 
-      rows = Array(data["data"]).map { |row| normalize_history_row(row) }
-      records_total = data["recordsFiltered"] || data["recordsTotal"] || rows.size
-      next_start = start.to_i + rows.size
-      has_more = next_start < records_total.to_i
+      raw_rows = Array(data["data"])
+      rows = []
+      skipped_rows = 0
+      raw_rows.each do |row|
+        normalized = normalize_history_row(row)
+        if normalized.blank?
+          skipped_rows += 1
+          next
+        end
+
+        rows << normalized
+      rescue ContractMismatchError
+        skipped_rows += 1
+      end
+
+      records_total = data["recordsFiltered"] || data["recordsTotal"] || raw_rows.size
+      next_start = start.to_i + raw_rows.size
+      has_more = raw_rows.any? && next_start < records_total.to_i
 
       {
         rows: rows,
+        raw_rows_count: raw_rows.size,
+        rows_skipped_invalid: skipped_rows,
         records_total: records_total.to_i,
         has_more: has_more,
         next_start: next_start
@@ -93,12 +110,10 @@ module Integrations
 
     def normalize_history_row(row)
       media_type = ensure_present!(row, :media_type).to_s
-      unless %w[movie episode].include?(media_type)
-        raise ContractMismatchError.new("unsupported tautulli media_type", details: { media_type: media_type })
-      end
+      return nil unless %w[movie episode].include?(media_type)
 
       {
-        history_id: ensure_present!(row, :id).to_i,
+        history_id: history_id_from(row),
         tautulli_user_id: ensure_present!(row, :user_id).to_i,
         media_type: media_type,
         plex_rating_key: ensure_present!(row, :rating_key).to_s,
@@ -107,6 +122,18 @@ module Integrations
         view_offset_ms: row["view_offset"]&.to_i || 0,
         duration_ms: row["duration"]&.to_i
       }
+    end
+
+    def history_id_from(row)
+      %i[row_id id reference_id].each do |key|
+        value = row[key.to_s]
+        return value.to_i if value.present?
+      end
+
+      raise ContractMismatchError.new(
+        "integration response did not include required fields",
+        details: { missing_key: "history_identity" }
+      )
     end
   end
 end

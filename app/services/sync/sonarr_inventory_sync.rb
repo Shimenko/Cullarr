@@ -12,6 +12,8 @@ module Sync
         series_fetched: 0,
         episodes_fetched: 0,
         media_files_fetched: 0,
+        episodes_estimated: 0,
+        media_files_estimated: 0,
         series_upserted: 0,
         episodes_upserted: 0,
         media_files_upserted: 0
@@ -24,22 +26,37 @@ module Sync
 
         adapter = Integrations::SonarrAdapter.new(integration:)
         mapper = CanonicalPathMapper.new(integration:)
+        worker_count = integration.sonarr_fetch_workers
 
         series_rows = adapter.fetch_series
-        phase_progress&.add_total!(series_rows.size)
+        estimated_episode_rows = series_rows.sum { |series_row| series_row.dig(:statistics, :total_episode_count).to_i }
+        estimated_file_rows = series_rows.sum { |series_row| series_row.dig(:statistics, :episode_file_count).to_i }
+        estimated_child_rows = estimated_episode_rows + estimated_file_rows
+
+        phase_progress&.add_total!(series_rows.size + estimated_child_rows)
         counts[:series_fetched] += series_rows.size
+        counts[:episodes_estimated] += estimated_episode_rows
+        counts[:media_files_estimated] += estimated_file_rows
         upserted_series = upsert_series!(integration:, rows: series_rows)
         counts[:series_upserted] += upserted_series
         phase_progress&.advance!(series_rows.size)
 
-        series_rows.each do |series_row|
-          episode_rows = adapter.fetch_episodes(series_id: series_row[:sonarr_series_id])
-          file_rows = adapter.fetch_episode_files(series_id: series_row[:sonarr_series_id])
+        process_series_children_concurrently(
+          integration: integration,
+          series_rows: series_rows,
+          worker_count: worker_count
+        ) do |payload|
+          series_row = payload.fetch(:series_row)
+          episode_rows = payload.fetch(:episode_rows)
+          file_rows = payload.fetch(:file_rows)
+          fetch_duration_ms = payload.fetch(:fetch_duration_ms)
+
           total_child_rows = episode_rows.size + file_rows.size
+          estimated_child_rows_for_series = estimated_child_rows_for(series_row)
+          phase_progress&.add_total!(total_child_rows - estimated_child_rows_for_series) if total_child_rows > estimated_child_rows_for_series
 
           counts[:episodes_fetched] += episode_rows.size
           counts[:media_files_fetched] += file_rows.size
-          phase_progress&.add_total!(total_child_rows)
 
           upserted_episodes, upserted_files = upsert_series_children!(
             integration: integration,
@@ -51,12 +68,19 @@ module Sync
           counts[:episodes_upserted] += upserted_episodes
           counts[:media_files_upserted] += upserted_files
           phase_progress&.advance!(total_child_rows)
+
+          log_info(
+            "sync_phase_worker_series_complete phase=sonarr_inventory integration_id=#{integration.id} " \
+            "series_id=#{series_row.fetch(:sonarr_series_id)} episodes_fetched=#{episode_rows.size} " \
+            "media_files_fetched=#{file_rows.size} fetch_duration_ms=#{fetch_duration_ms}"
+          )
         end
 
         log_info(
           "sync_phase_worker_integration_complete phase=sonarr_inventory integration_id=#{integration.id} " \
-          "series_fetched=#{counts[:series_fetched]} episodes_fetched=#{counts[:episodes_fetched]} " \
-          "media_files_fetched=#{counts[:media_files_fetched]}"
+          "workers=#{worker_count} series_fetched=#{counts[:series_fetched]} " \
+          "episodes_estimated=#{counts[:episodes_estimated]} episodes_fetched=#{counts[:episodes_fetched]} " \
+          "media_files_estimated=#{counts[:media_files_estimated]} media_files_fetched=#{counts[:media_files_fetched]}"
         )
       end
 
@@ -67,6 +91,62 @@ module Sync
     private
 
     attr_reader :correlation_id, :phase_progress, :sync_run
+
+    def process_series_children_concurrently(integration:, series_rows:, worker_count:)
+      return if series_rows.empty?
+
+      work_queue = Queue.new
+      result_queue = Queue.new
+
+      series_rows.each { |series_row| work_queue << series_row }
+      worker_count.times { work_queue << nil }
+
+      threads = Array.new(worker_count) do
+        Thread.new do
+          thread_adapter = Integrations::SonarrAdapter.new(integration: integration)
+
+          loop do
+            series_row = work_queue.pop
+            break if series_row.nil?
+
+            started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            series_id = series_row.fetch(:sonarr_series_id)
+            episode_rows = thread_adapter.fetch_episodes(series_id: series_id)
+            file_rows = thread_adapter.fetch_episode_files(series_id: series_id)
+            fetch_duration_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000).round
+
+            result_queue << {
+              series_row: series_row,
+              episode_rows: episode_rows,
+              file_rows: file_rows,
+              fetch_duration_ms: fetch_duration_ms
+            }
+          rescue StandardError => error
+            result_queue << { error: error }
+          end
+        end
+      end
+
+      first_error = nil
+      series_rows.size.times do
+        result = result_queue.pop
+        if result[:error].present?
+          first_error ||= result.fetch(:error)
+          next
+        end
+
+        yield result if first_error.nil?
+      end
+
+      raise first_error if first_error.present?
+    ensure
+      threads&.each(&:join)
+    end
+
+    def estimated_child_rows_for(series_row)
+      statistics = series_row[:statistics] || {}
+      statistics.fetch(:total_episode_count, 0).to_i + statistics.fetch(:episode_file_count, 0).to_i
+    end
 
     def upsert_series!(integration:, rows:)
       return 0 if rows.empty?

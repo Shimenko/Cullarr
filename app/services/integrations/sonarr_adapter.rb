@@ -26,6 +26,10 @@ module Integrations
           tmdb_id: series["tmdbId"]&.to_i,
           plex_rating_key: series["ratings"]&.dig("plex", "ratingKey"),
           plex_guid: series["ratings"]&.dig("plex", "guid"),
+          statistics: {
+            total_episode_count: series["statistics"]&.dig("totalEpisodeCount")&.to_i || 0,
+            episode_file_count: series["statistics"]&.dig("episodeFileCount")&.to_i || 0
+          },
           metadata: {
             path: series["path"],
             monitored: series["monitored"]

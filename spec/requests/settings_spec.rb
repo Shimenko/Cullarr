@@ -27,6 +27,21 @@ RSpec.describe "Settings", type: :request do
     expect(response.body).to include("Media Files Indexed")
   end
 
+  it "renders kind-specific tuner groups for integration creation" do
+    sign_in_operator!
+
+    get "/settings"
+
+    form = integration_create_form
+    expect(form).to be_present
+    expect(form.at_css("[data-integration-kind-tuners-target='kindField'] select[name='integration[kind]']")).to be_present
+    expect(integration_create_group_fields(form)).to eq(
+      "sonarr" => "integration[settings][sonarr_fetch_workers]",
+      "radarr" => "integration[settings][radarr_moviefile_fetch_workers]",
+      "tautulli" => "integration[settings][tautulli_history_page_size]"
+    )
+  end
+
   def create_metrics_media_file!
     integration = Integration.create!(
       kind: "radarr",
@@ -44,5 +59,15 @@ RSpec.describe "Settings", type: :request do
       path_canonical: "/mnt/movies/Example.mkv",
       size_bytes: 100
     )
+  end
+
+  def integration_create_form
+    Nokogiri::HTML.parse(response.body).at_css("form[data-controller='integration-kind-tuners']")
+  end
+
+  def integration_create_group_fields(form)
+    form.css("[data-integration-kind-tuners-target='group'][data-kind]").to_h do |group|
+      [ group["data-kind"], group.at_css("input")&.[]("name") ]
+    end
   end
 end

@@ -11,7 +11,7 @@ RSpec.describe Sync::TautulliHistorySync, type: :service do
       base_url: "https://tautulli.sync.local",
       api_key: "secret",
       verify_ssl: true,
-      settings_json: {}
+      settings_json: { "tautulli_history_page_size" => 200 }
     )
     plex_user = PlexUser.create!(tautulli_user_id: 10, friendly_name: "Alice", is_hidden: false)
     movie_integration = Integration.create!(
@@ -52,6 +52,8 @@ RSpec.describe Sync::TautulliHistorySync, type: :service do
             duration_ms: nil
           }
         ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
         has_more: false,
         next_start: 1
       }
@@ -60,7 +62,7 @@ RSpec.describe Sync::TautulliHistorySync, type: :service do
     result = described_class.new(sync_run:, correlation_id: "corr-tautulli").call
 
     stat = WatchStat.find_by!(plex_user: plex_user, watchable: movie)
-    expect(result).to include(rows_fetched: 1, rows_processed: 1, watch_stats_upserted: 1)
+    expect(result).to include(rows_fetched: 1, rows_processed: 1, rows_invalid: 0, watch_stats_upserted: 1)
     expect(stat.play_count).to eq(1)
     expect(stat.watched).to be(true)
     expect(stat.in_progress).to be(false)
@@ -74,7 +76,7 @@ RSpec.describe Sync::TautulliHistorySync, type: :service do
       base_url: "https://tautulli.ambiguous.local",
       api_key: "secret",
       verify_ssl: true,
-      settings_json: {}
+      settings_json: { "tautulli_history_page_size" => 200 }
     )
     plex_user = PlexUser.create!(tautulli_user_id: 44, friendly_name: "Bob", is_hidden: false)
     radarr_a = Integration.create!(
@@ -118,6 +120,8 @@ RSpec.describe Sync::TautulliHistorySync, type: :service do
             duration_ms: 1_500_000
           }
         ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
         has_more: false,
         next_start: 1
       }
@@ -128,12 +132,74 @@ RSpec.describe Sync::TautulliHistorySync, type: :service do
     expect(result).to include(
       rows_fetched: 1,
       rows_processed: 0,
+      rows_invalid: 0,
       rows_ambiguous: 1,
       rows_skipped: 0,
       watch_stats_upserted: 0
     )
     expect(WatchStat.where(plex_user: plex_user)).to be_empty
     expect(tautulli_integration.reload.settings_json.dig("history_sync_state", "watermark_id")).to eq(5001)
+  end
+
+  it "continues processing when a page includes invalid rows" do
+    tautulli_integration = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Mixed History",
+      base_url: "https://tautulli.mixed.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: { "tautulli_history_page_size" => 200 }
+    )
+    plex_user = PlexUser.create!(tautulli_user_id: 77, friendly_name: "Carol", is_hidden: false)
+    movie_integration = Integration.create!(
+      kind: "radarr",
+      name: "Radarr Mixed",
+      base_url: "https://radarr.mixed.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    movie = Movie.create!(integration: movie_integration, radarr_movie_id: 1701, title: "Mixed Movie", plex_rating_key: "plex-mixed-1701")
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).and_return(health_check)
+
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli_integration).and_return(adapter)
+    allow(adapter).to receive(:fetch_history_page).with(
+      start: 0,
+      length: 200,
+      order_column: "id",
+      order_dir: "desc"
+    ).and_return(
+      {
+        rows: [
+          {
+            history_id: 7101,
+            tautulli_user_id: plex_user.tautulli_user_id,
+            media_type: "movie",
+            plex_rating_key: movie.plex_rating_key,
+            viewed_at: Time.zone.parse("2026-02-10 13:00:00"),
+            play_count: 1,
+            view_offset_ms: 500_000,
+            duration_ms: 1_000_000
+          }
+        ],
+        raw_rows_count: 2,
+        rows_skipped_invalid: 1,
+        has_more: false,
+        next_start: 2
+      }
+    )
+
+    result = described_class.new(sync_run:, correlation_id: "corr-mixed-history").call
+
+    expect(result).to include(
+      rows_fetched: 2,
+      rows_processed: 1,
+      rows_invalid: 1,
+      rows_skipped: 1,
+      watch_stats_upserted: 1
+    )
   end
 end
 # rubocop:enable RSpec/ExampleLength

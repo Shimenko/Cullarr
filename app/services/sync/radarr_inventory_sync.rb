@@ -22,10 +22,16 @@ module Sync
 
         adapter = Integrations::RadarrAdapter.new(integration:)
         mapper = CanonicalPathMapper.new(integration:)
+        worker_count = integration.radarr_moviefile_fetch_workers
 
-        movies = adapter.fetch_movies
-        movie_files = extract_movie_files(adapter: adapter, movie_rows: movies)
-        phase_progress&.add_total!(movies.size + movie_files.size)
+        movies = fetch_movies(adapter:)
+        phase_progress&.add_total!(movies.size)
+        movie_files = extract_movie_files(
+          integration: integration,
+          movie_rows: movies,
+          worker_count: worker_count
+        )
+        phase_progress&.add_total!(movie_files.size)
 
         counts[:movies_fetched] += movies.size
         counts[:media_files_fetched] += movie_files.size
@@ -41,7 +47,8 @@ module Sync
 
         log_info(
           "sync_phase_worker_integration_complete phase=radarr_inventory integration_id=#{integration.id} " \
-          "movies_fetched=#{counts[:movies_fetched]} media_files_fetched=#{counts[:media_files_fetched]}"
+          "workers=#{worker_count} movies_fetched=#{counts[:movies_fetched]} " \
+          "media_files_fetched=#{counts[:media_files_fetched]}"
         )
       end
 
@@ -110,7 +117,7 @@ module Sync
       payload.size
     end
 
-    def extract_movie_files(adapter:, movie_rows:)
+    def extract_movie_files(integration:, movie_rows:, worker_count:)
       from_movies = movie_rows.filter_map { |row| row[:movie_file] }
       fallback_movie_ids = movie_rows.filter_map do |row|
         next if row[:movie_file].present?
@@ -119,11 +126,70 @@ module Sync
         row.fetch(:radarr_movie_id)
       end
 
-      fallback_rows = fallback_movie_ids.flat_map do |movie_id|
-        adapter.fetch_movie_files(movie_id: movie_id)
-      end
+      phase_progress&.add_total!(fallback_movie_ids.size)
+      fallback_rows = fetch_movie_files_concurrently(
+        integration: integration,
+        movie_ids: fallback_movie_ids,
+        worker_count: worker_count
+      )
 
       from_movies + fallback_rows
+    end
+
+    def fetch_movie_files_concurrently(integration:, movie_ids:, worker_count:)
+      return [] if movie_ids.empty?
+
+      work_queue = Queue.new
+      result_queue = Queue.new
+
+      movie_ids.each { |movie_id| work_queue << movie_id }
+      worker_count.times { work_queue << nil }
+
+      threads = Array.new(worker_count) do
+        Thread.new do
+          thread_adapter = Integrations::RadarrAdapter.new(integration: integration)
+
+          loop do
+            movie_id = work_queue.pop
+            break if movie_id.nil?
+
+            rows = thread_adapter.fetch_movie_files(movie_id: movie_id)
+
+            result_queue << { rows: rows }
+          rescue StandardError => error
+            result_queue << { error: error }
+          end
+        end
+      end
+
+      first_error = nil
+      aggregated_rows = []
+
+      movie_ids.size.times do
+        result = result_queue.pop
+        if result[:error].present?
+          first_error ||= result.fetch(:error)
+          next
+        end
+
+        if first_error.nil?
+          phase_progress&.advance!(1)
+          aggregated_rows.concat(result.fetch(:rows))
+        end
+      end
+
+      raise first_error if first_error.present?
+
+      aggregated_rows
+    ensure
+      threads&.each(&:join)
+    end
+
+    def fetch_movies(adapter:)
+      phase_progress&.add_total!(1)
+      adapter.fetch_movies.tap do
+        phase_progress&.advance!(1)
+      end
     end
 
     def log_info(message)

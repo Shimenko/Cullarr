@@ -72,7 +72,14 @@ module Api
           :base_url,
           :api_key,
           :verify_ssl,
-          settings: %i[compatibility_mode request_timeout_seconds retry_max_attempts]
+          settings: %i[
+            compatibility_mode
+            request_timeout_seconds
+            retry_max_attempts
+            sonarr_fetch_workers
+            radarr_moviefile_fetch_workers
+            tautulli_history_page_size
+          ]
         )
       end
 

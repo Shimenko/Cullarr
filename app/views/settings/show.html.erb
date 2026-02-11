@@ -252,12 +252,16 @@
     subtitle: "Configure Sonarr, Radarr, and Tautulli endpoints and test compatibility. Integration host/network allowlists are env-managed through CULLARR_ALLOWED_INTEGRATION_HOSTS and CULLARR_ALLOWED_INTEGRATION_NETWORK_RANGES; host patterns support wildcards; when unset, URL validation is permissive.",
     padding: :lg
   ) do %>
-    <%= form_with url: integrations_path, method: :post, scope: :integration, class: "grid gap-3 md:grid-cols-3" do %>
-      <%= render Ui::SelectComponent.new(
-        name: "integration[kind]",
-        label: "Kind",
-        options: Integration.kinds.keys
-      ) %>
+    <% default_integration_kind = Integration.kinds.keys.first %>
+    <%= form_with url: integrations_path, method: :post, scope: :integration, class: "grid gap-3 md:grid-cols-3", data: { controller: "integration-kind-tuners" } do %>
+      <div data-integration-kind-tuners-target="kindField" data-action="change->integration-kind-tuners#kindChanged">
+        <%= render Ui::SelectComponent.new(
+          name: "integration[kind]",
+          label: "Kind",
+          options: Integration.kinds.keys,
+          selected: default_integration_kind
+        ) %>
+      </div>
 
       <%= render Ui::InputComponent.new(
         name: "integration[name]",
@@ -289,6 +293,83 @@
         options: [ [ "Strict latest", "strict_latest" ], [ "Warn only read-only", "warn_only_read_only" ] ],
         selected: "strict_latest"
       ) %>
+
+      <%= render Ui::InputComponent.new(
+        name: "integration[settings][request_timeout_seconds]",
+        label: "Request Timeout (seconds)",
+        value: 15,
+        type: :number,
+        min: 1,
+        max: 120,
+        autocomplete: "off"
+      ) %>
+
+      <%= render Ui::InputComponent.new(
+        name: "integration[settings][retry_max_attempts]",
+        label: "Retry Attempts",
+        value: 5,
+        type: :number,
+        min: 1,
+        max: 10,
+        autocomplete: "off"
+      ) %>
+
+      <%= tag.div(
+        data: {
+          integration_kind_tuners_target: "group",
+          kind: "sonarr"
+        },
+        class: ("hidden" unless default_integration_kind == "sonarr")
+      ) do %>
+        <%= render Ui::InputComponent.new(
+          name: "integration[settings][sonarr_fetch_workers]",
+          label: "Sonarr Fetch Workers",
+          value: 4,
+          type: :number,
+          min: 1,
+          max: 8,
+          autocomplete: "off",
+          disabled: default_integration_kind != "sonarr"
+        ) %>
+      <% end %>
+
+      <%= tag.div(
+        data: {
+          integration_kind_tuners_target: "group",
+          kind: "radarr"
+        },
+        class: ("hidden" unless default_integration_kind == "radarr")
+      ) do %>
+        <%= render Ui::InputComponent.new(
+          name: "integration[settings][radarr_moviefile_fetch_workers]",
+          label: "Radarr MovieFile Workers",
+          value: 4,
+          type: :number,
+          min: 1,
+          max: 8,
+          autocomplete: "off",
+          disabled: default_integration_kind != "radarr"
+        ) %>
+      <% end %>
+
+      <%= tag.div(
+        data: {
+          integration_kind_tuners_target: "group",
+          kind: "tautulli"
+        },
+        class: ("hidden" unless default_integration_kind == "tautulli")
+      ) do %>
+        <%= render Ui::InputComponent.new(
+          name: "integration[settings][tautulli_history_page_size]",
+          label: "Tautulli History Page Size",
+          value: 500,
+          type: :number,
+          min: 50,
+          max: 5000,
+          autocomplete: "off",
+          disabled: default_integration_kind != "tautulli"
+        ) %>
+      <% end %>
 
       <div class="pt-7">
         <%= render Ui::CheckboxComponent.new(name: "integration[verify_ssl]", label: "Verify SSL", checked: true) %>
@@ -339,6 +420,61 @@
               options: [ [ "Strict latest", "strict_latest" ], [ "Warn only read-only", "warn_only_read_only" ] ],
               selected: integration.compatibility_mode
             ) %>
+
+            <%= render Ui::InputComponent.new(
+              name: "integration[settings][request_timeout_seconds]",
+              label: "Request Timeout (seconds)",
+              value: integration.request_timeout_seconds,
+              type: :number,
+              min: 1,
+              max: 120,
+              autocomplete: "off"
+            ) %>
+
+            <%= render Ui::InputComponent.new(
+              name: "integration[settings][retry_max_attempts]",
+              label: "Retry Attempts",
+              value: integration.retry_max_attempts,
+              type: :number,
+              min: 1,
+              max: 10,
+              autocomplete: "off"
+            ) %>
+            <% if integration.sonarr? %>
+              <%= render Ui::InputComponent.new(
+                name: "integration[settings][sonarr_fetch_workers]",
+                label: "Sonarr Fetch Workers",
+                value: integration.sonarr_fetch_workers,
+                type: :number,
+                min: 1,
+                max: 8,
+                autocomplete: "off"
+              ) %>
+            <% end %>
+
+            <% if integration.radarr? %>
+              <%= render Ui::InputComponent.new(
+                name: "integration[settings][radarr_moviefile_fetch_workers]",
+                label: "Radarr MovieFile Workers",
+                value: integration.radarr_moviefile_fetch_workers,
+                type: :number,
+                min: 1,
+                max: 8,
+                autocomplete: "off"
+              ) %>
+            <% end %>
+
+            <% if integration.tautulli? %>
+              <%= render Ui::InputComponent.new(
+                name: "integration[settings][tautulli_history_page_size]",
+                label: "Tautulli History Page Size",
+                value: integration.tautulli_history_page_size,
+                type: :number,
+                min: 50,
+                max: 5000,
+                autocomplete: "off"
+              ) %>
+            <% end %>
 
             <div class="pt-7">
               <%= render Ui::CheckboxComponent.new(

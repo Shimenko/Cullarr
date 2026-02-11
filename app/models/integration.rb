@@ -3,7 +3,14 @@ class Integration < ApplicationRecord
 
   encrypts :api_key_ciphertext
 
-  store_accessor :settings_json, :compatibility_mode, :request_timeout_seconds, :retry_max_attempts, :supported_for_delete
+  store_accessor :settings_json,
+    :compatibility_mode,
+    :request_timeout_seconds,
+    :retry_max_attempts,
+    :supported_for_delete,
+    :sonarr_fetch_workers,
+    :radarr_moviefile_fetch_workers,
+    :tautulli_history_page_size
 
   has_many :arr_tags, dependent: :destroy
   has_many :deletion_actions, dependent: :restrict_with_exception
@@ -34,6 +41,21 @@ class Integration < ApplicationRecord
   def retry_max_attempts
     raw_value = settings_json["retry_max_attempts"] || 5
     raw_value.to_i.clamp(1, 10)
+  end
+
+  def sonarr_fetch_workers
+    raw_value = settings_json["sonarr_fetch_workers"] || 4
+    raw_value.to_i.clamp(1, 8)
+  end
+
+  def radarr_moviefile_fetch_workers
+    raw_value = settings_json["radarr_moviefile_fetch_workers"] || 4
+    raw_value.to_i.clamp(1, 8)
+  end
+
+  def tautulli_history_page_size
+    raw_value = settings_json["tautulli_history_page_size"] || 500
+    raw_value.to_i.clamp(50, 5_000)
   end
 
   def api_key
@@ -95,6 +117,13 @@ class Integration < ApplicationRecord
         mode: compatibility_mode,
         supported_for_delete: supported_for_delete?
       },
+      tuning: {
+        request_timeout_seconds: request_timeout_seconds,
+        retry_max_attempts: retry_max_attempts,
+        sonarr_fetch_workers: sonarr_fetch_workers,
+        radarr_moviefile_fetch_workers: radarr_moviefile_fetch_workers,
+        tautulli_history_page_size: tautulli_history_page_size
+      },
       path_mappings: path_mappings.order(:from_prefix).map do |mapping|
         {
           id: mapping.id,
@@ -118,6 +147,9 @@ class Integration < ApplicationRecord
     settings_json["compatibility_mode"] ||= AppSetting.db_value_for("compatibility_mode_default")
     settings_json["request_timeout_seconds"] = request_timeout_seconds
     settings_json["retry_max_attempts"] = retry_max_attempts
+    settings_json["sonarr_fetch_workers"] = sonarr_fetch_workers
+    settings_json["radarr_moviefile_fetch_workers"] = radarr_moviefile_fetch_workers
+    settings_json["tautulli_history_page_size"] = tautulli_history_page_size
     self.verify_ssl = true if verify_ssl.nil?
   end
 

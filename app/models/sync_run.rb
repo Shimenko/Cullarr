@@ -113,6 +113,9 @@ class SyncRun < ApplicationRecord
       else
         phase_percent(total_units:, processed_units:)
       end
+      if state == "current" && percent_complete >= 100.0
+        percent_complete = 99.9
+      end
 
       {
         phase: phase_name,

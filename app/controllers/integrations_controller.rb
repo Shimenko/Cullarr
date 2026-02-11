@@ -87,15 +87,22 @@ class IntegrationsController < ApplicationController
   end
 
   def integration_params
-    params.require(:integration).permit(
-      :kind,
-      :name,
-      :base_url,
-      :api_key,
-      :verify_ssl,
-      settings: %i[compatibility_mode request_timeout_seconds retry_max_attempts]
-    )
-  end
+      params.require(:integration).permit(
+        :kind,
+        :name,
+        :base_url,
+        :api_key,
+        :verify_ssl,
+        settings: %i[
+          compatibility_mode
+          request_timeout_seconds
+          retry_max_attempts
+          sonarr_fetch_workers
+          radarr_moviefile_fetch_workers
+          tautulli_history_page_size
+        ]
+      )
+    end
 
   def create_update_attributes
     attributes = {

@@ -4,7 +4,6 @@ module Sync
   class TautulliHistorySync
     AMBIGUOUS_WATCHABLE = Object.new.freeze
 
-    HISTORY_PAGE_SIZE = 200
     HISTORY_OVERLAP_ROWS = 100
     RECENT_HISTORY_MEMORY = 1000
 
@@ -20,6 +19,7 @@ module Sync
         rows_fetched: 0,
         rows_processed: 0,
         rows_skipped: 0,
+        rows_invalid: 0,
         rows_ambiguous: 0,
         watch_stats_upserted: 0
       }
@@ -30,10 +30,12 @@ module Sync
         counts[:integrations] += 1
 
         adapter = Integrations::TautulliAdapter.new(integration:)
+        page_size = integration.tautulli_history_page_size
         rows, state = incremental_history_rows(adapter:, integration:)
         counts[:rows_fetched] += rows[:fetched]
         upsert_result = upsert_watch_stats!(rows[:process])
         counts[:rows_processed] += upsert_result[:rows_processed]
+        counts[:rows_invalid] += rows[:invalid]
         counts[:rows_skipped] += rows[:skipped] + upsert_result[:rows_skipped]
         counts[:rows_ambiguous] += upsert_result[:rows_ambiguous]
         counts[:watch_stats_upserted] += upsert_result[:watch_stats_upserted]
@@ -43,7 +45,9 @@ module Sync
 
         log_info(
           "sync_phase_worker_integration_complete phase=tautulli_history integration_id=#{integration.id} " \
+          "page_size=#{page_size} " \
           "rows_fetched=#{counts[:rows_fetched]} rows_processed=#{counts[:rows_processed]} " \
+          "rows_invalid=#{counts[:rows_invalid]} " \
           "rows_skipped=#{counts[:rows_skipped]} rows_ambiguous=#{counts[:rows_ambiguous]} " \
           "watch_stats_upserted=#{counts[:watch_stats_upserted]}"
         )
@@ -61,25 +65,30 @@ module Sync
       sync_state = history_sync_state(integration)
       lower_bound = [ sync_state[:watermark_id] - HISTORY_OVERLAP_ROWS, 0 ].max
       recent_ids = sync_state[:recent_ids].to_set
+      page_size = integration.tautulli_history_page_size
 
       start = 0
       fetched_rows = 0
       skipped_rows = 0
+      invalid_rows = 0
       rows_to_process = []
 
       loop do
         page = adapter.fetch_history_page(
           start: start,
-          length: HISTORY_PAGE_SIZE,
+          length: page_size,
           order_column: "id",
           order_dir: "desc"
         )
+        fetched_count = page.fetch(:raw_rows_count, 0).to_i
         page_rows = page.fetch(:rows)
-        break if page_rows.empty?
-        phase_progress&.add_total!(page_rows.size * 2)
-        phase_progress&.advance!(page_rows.size)
+        break if fetched_count <= 0
+        phase_progress&.add_total!(fetched_count * 2)
+        phase_progress&.advance!(fetched_count)
 
-        fetched_rows += page_rows.size
+        fetched_rows += fetched_count
+        skipped_rows += page.fetch(:rows_skipped_invalid, 0).to_i
+        invalid_rows += page.fetch(:rows_skipped_invalid, 0).to_i
         page_rows.each do |row|
           history_id = row.fetch(:history_id).to_i
           if history_id <= lower_bound || recent_ids.include?(history_id)
@@ -90,7 +99,7 @@ module Sync
           rows_to_process << row
         end
 
-        break if page_rows.all? { |row| row.fetch(:history_id).to_i <= lower_bound }
+        break if page_rows.any? && page_rows.all? { |row| row.fetch(:history_id).to_i <= lower_bound }
         break unless page.fetch(:has_more)
 
         start = page.fetch(:next_start)
@@ -100,6 +109,7 @@ module Sync
       processed_ids = rows_to_process.map { |row| row.fetch(:history_id).to_i }
       {
         fetched: fetched_rows,
+        invalid: invalid_rows,
         skipped: skipped_rows,
         process: rows_to_process
       }.yield_self do |rows|

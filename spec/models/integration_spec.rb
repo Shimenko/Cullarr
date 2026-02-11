@@ -57,7 +57,37 @@ RSpec.describe Integration, type: :model do
     payload = integration.as_api_json
     expect(payload).to include(:id, :kind, :name, :base_url, :status)
     expect(payload[:api_key_present]).to be(true)
+    expect(payload[:tuning]).to include(
+      request_timeout_seconds: 15,
+      retry_max_attempts: 5,
+      sonarr_fetch_workers: 4,
+      radarr_moviefile_fetch_workers: 4,
+      tautulli_history_page_size: 500
+    )
     expect(payload).not_to have_key(:api_key)
+  end
+
+  it "clamps integration tuning settings to safe bounds" do
+    integration = described_class.create!(
+      kind: "tautulli",
+      name: "Tautulli Tuned",
+      base_url: "https://tautulli.tuned.local",
+      api_key: "secret-key",
+      verify_ssl: true,
+      settings_json: {
+        "request_timeout_seconds" => 500,
+        "retry_max_attempts" => 0,
+        "sonarr_fetch_workers" => 99,
+        "radarr_moviefile_fetch_workers" => -5,
+        "tautulli_history_page_size" => 9_999
+      }
+    )
+
+    expect(integration.request_timeout_seconds).to eq(120)
+    expect(integration.retry_max_attempts).to eq(1)
+    expect(integration.sonarr_fetch_workers).to eq(8)
+    expect(integration.radarr_moviefile_fetch_workers).to eq(1)
+    expect(integration.tautulli_history_page_size).to eq(5000)
   end
 
   it "stores api key encrypted at rest" do
