@@ -151,8 +151,14 @@ module Sync
     def upsert_series!(integration:, rows:)
       return 0 if rows.empty?
 
+      existing_by_source_id = Series.where(
+        integration_id: integration.id,
+        sonarr_series_id: rows.map { |row| row.fetch(:sonarr_series_id) }
+      ).index_by(&:sonarr_series_id)
+
       now = Time.current
       payload = rows.map do |row|
+        existing = existing_by_source_id[row.fetch(:sonarr_series_id)]
         {
           integration_id: integration.id,
           sonarr_series_id: row.fetch(:sonarr_series_id),
@@ -161,8 +167,8 @@ module Sync
           tvdb_id: row[:tvdb_id],
           imdb_id: row[:imdb_id],
           tmdb_id: row[:tmdb_id],
-          plex_rating_key: row[:plex_rating_key],
-          plex_guid: row[:plex_guid],
+          plex_rating_key: resolved_plex_value(existing_value: existing&.plex_rating_key, incoming_value: row[:plex_rating_key]),
+          plex_guid: resolved_plex_value(existing_value: existing&.plex_guid, incoming_value: row[:plex_guid]),
           metadata_json: row[:metadata] || {},
           created_at: now,
           updated_at: now
@@ -204,7 +210,12 @@ module Sync
       Season.upsert_all(season_payload, unique_by: %i[series_id season_number])
 
       season_by_number = Season.where(series_id: series.id, season_number: season_numbers).index_by(&:season_number)
+      existing_by_source_id = Episode.where(
+        integration_id: integration.id,
+        sonarr_episode_id: rows.map { |row| row.fetch(:sonarr_episode_id) }
+      ).index_by(&:sonarr_episode_id)
       payload = rows.map do |row|
+        existing = existing_by_source_id[row.fetch(:sonarr_episode_id)]
         {
           integration_id: integration.id,
           season_id: season_by_number.fetch(row.fetch(:season_number)).id,
@@ -216,8 +227,8 @@ module Sync
           tvdb_id: row[:tvdb_id],
           imdb_id: row[:imdb_id],
           tmdb_id: row[:tmdb_id],
-          plex_rating_key: row[:plex_rating_key],
-          plex_guid: row[:plex_guid],
+          plex_rating_key: resolved_plex_value(existing_value: existing&.plex_rating_key, incoming_value: row[:plex_rating_key]),
+          plex_guid: resolved_plex_value(existing_value: existing&.plex_guid, incoming_value: row[:plex_guid]),
           metadata_json: { external_ids: row[:external_ids] || {} },
           created_at: now,
           updated_at: now
@@ -276,6 +287,13 @@ module Sync
           "correlation_id=#{correlation_id}"
         ].join(" ")
       )
+    end
+
+    def resolved_plex_value(existing_value:, incoming_value:)
+      incoming_present = incoming_value.to_s.strip.presence
+      return incoming_present if incoming_present.present?
+
+      existing_value.to_s.strip.presence
     end
   end
 end

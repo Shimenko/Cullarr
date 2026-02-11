@@ -63,8 +63,14 @@ module Sync
     def upsert_movies!(integration:, rows:)
       return 0 if rows.empty?
 
+      existing_by_source_id = Movie.where(
+        integration_id: integration.id,
+        radarr_movie_id: rows.map { |row| row.fetch(:radarr_movie_id) }
+      ).index_by(&:radarr_movie_id)
+
       now = Time.current
       payload = rows.map do |row|
+        existing = existing_by_source_id[row.fetch(:radarr_movie_id)]
         {
           integration_id: integration.id,
           radarr_movie_id: row.fetch(:radarr_movie_id),
@@ -72,8 +78,8 @@ module Sync
           year: row[:year],
           tmdb_id: row[:tmdb_id],
           imdb_id: row[:imdb_id],
-          plex_rating_key: row[:plex_rating_key],
-          plex_guid: row[:plex_guid],
+          plex_rating_key: resolved_plex_value(existing_value: existing&.plex_rating_key, incoming_value: row[:plex_rating_key]),
+          plex_guid: resolved_plex_value(existing_value: existing&.plex_guid, incoming_value: row[:plex_guid]),
           duration_ms: row[:duration_ms],
           metadata_json: row[:metadata] || {},
           created_at: now,
@@ -200,6 +206,13 @@ module Sync
           "correlation_id=#{correlation_id}"
         ].join(" ")
       )
+    end
+
+    def resolved_plex_value(existing_value:, incoming_value:)
+      incoming_present = incoming_value.to_s.strip.presence
+      return incoming_present if incoming_present.present?
+
+      existing_value.to_s.strip.presence
     end
   end
 end

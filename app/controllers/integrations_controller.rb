@@ -84,14 +84,16 @@ class IntegrationsController < ApplicationController
       return
     end
 
-    prior_state = @integration.settings_json["history_sync_state"]
-    if prior_state.blank?
+    prior_history_state = @integration.settings_json["history_sync_state"]
+    prior_library_mapping_state = @integration.settings_json["library_mapping_state"]
+    if prior_history_state.blank? && prior_library_mapping_state.blank?
       redirect_to settings_path, notice: "History sync state is already clear."
       return
     end
 
     settings = @integration.settings_json.deep_dup
     settings.delete("history_sync_state")
+    settings.delete("library_mapping_state")
     @integration.update!(settings_json: settings)
 
     AuditEvents::Recorder.record!(
@@ -101,7 +103,8 @@ class IntegrationsController < ApplicationController
       subject: @integration,
       payload: {
         action: "history_state_reset",
-        prior_history_state: prior_state
+        prior_history_state: prior_history_state,
+        prior_library_mapping_state: prior_library_mapping_state
       }
     )
 

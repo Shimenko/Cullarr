@@ -67,6 +67,37 @@ RSpec.describe Integrations::TautulliAdapter, type: :service do
     stubs.verify_stubbed_calls
   end
 
+  it "normalizes libraries and library media pages" do
+    stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+      stub.get("api/v2") do |env|
+        expect(env.params["apikey"]).to eq("secret")
+        case env.params["cmd"]
+        when "get_libraries"
+          [ 200, {}, fixture_json("tautulli/get_libraries.json") ]
+        when "get_library_media_info"
+          expect(env.params["section_id"]).to eq("10")
+          expect(env.params["start"]).to eq("0")
+          expect(env.params["length"]).to eq("50")
+          [ 200, {}, fixture_json("tautulli/get_library_media_info_page.json") ]
+        else
+          [ 500, {}, "{}" ]
+        end
+      end
+    end
+    adapter = described_class.new(integration:, connection: test_connection(stubs))
+
+    libraries = adapter.fetch_libraries
+    page = adapter.fetch_library_media_page(library_id: 10, start: 0, length: 50)
+
+    expect(libraries).to include(include(library_id: 10, title: "Movies"))
+    expect(page[:rows].size).to eq(2)
+    expect(page[:raw_rows_count]).to eq(3)
+    expect(page[:rows_skipped_invalid]).to eq(1)
+    expect(page[:rows].first).to include(media_type: "movie", plex_rating_key: "plex-movie-111")
+    expect(page[:rows].last).to include(media_type: "episode", plex_rating_key: "plex-episode-222")
+    stubs.verify_stubbed_calls
+  end
+
   it "extracts external ids from guids when top-level metadata ids are absent" do
     payload = {
       response: {

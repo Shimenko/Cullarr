@@ -68,7 +68,38 @@ RSpec.describe Integration, type: :model do
       tautulli_metadata_workers: 4,
       tautulli_metadata_workers_resolved: 4
     )
+    expect(payload[:tautulli_library_mapping_state]).to be_nil
     expect(payload).not_to have_key(:api_key)
+  end
+
+  it "summarizes tautulli library mapping state in api payload" do
+    integration = described_class.create!(
+      kind: "tautulli",
+      name: "Tautulli Mapping",
+      base_url: "https://tautulli.mapping.local",
+      api_key: "secret-key",
+      verify_ssl: true,
+      settings_json: {
+        "library_mapping_state" => {
+          "last_run_at" => "2026-02-11T10:00:00Z",
+          "libraries" => {
+            "1" => { "next_start" => 0, "completed_cycle_count" => 2 },
+            "2" => { "next_start" => 500, "completed_cycle_count" => 1 }
+          }
+        }
+      }
+    )
+
+    payload = integration.as_api_json
+    expect(payload[:tautulli_library_mapping_state]).to eq(
+      {
+        present: true,
+        libraries_count: 2,
+        active_cursors_count: 1,
+        completed_cycles: 3,
+        last_run_at: "2026-02-11T10:00:00Z"
+      }
+    )
   end
 
   it "clamps integration tuning settings to safe bounds" do

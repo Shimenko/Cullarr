@@ -1,0 +1,32 @@
+{
+  "response": {
+    "result": "success",
+    "data": {
+      "recordsFiltered": 3,
+      "data": [
+        {
+          "media_type": "movie",
+          "rating_key": "plex-movie-111",
+          "guid": "plex://movie/111",
+          "file": "/mnt/movies/Example Movie (2024)/movie.mkv",
+          "imdb_id": "tt111111",
+          "tmdb_id": 111111
+        },
+        {
+          "media_type": "episode",
+          "rating_key": "plex-episode-222",
+          "guid": "plex://episode/222",
+          "grandparent_rating_key": "plex-show-99",
+          "parent_media_index": 1,
+          "media_index": 2,
+          "path": "/mnt/tv/Example Show/Season 01/Example Show - S01E02.mkv",
+          "tvdb_id": 222222
+        },
+        {
+          "media_type": "artist",
+          "rating_key": "plex-artist-333"
+        }
+      ]
+    }
+  }
+}

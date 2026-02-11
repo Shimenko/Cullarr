@@ -1,0 +1,17 @@
+{
+  "response": {
+    "result": "success",
+    "data": [
+      {
+        "section_id": 10,
+        "section_name": "Movies",
+        "section_type": "movie"
+      },
+      {
+        "section_id": 20,
+        "section_name": "TV Shows",
+        "section_type": "show"
+      }
+    ]
+  }
+}

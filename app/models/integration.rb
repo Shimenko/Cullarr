@@ -151,6 +151,7 @@ class Integration < ApplicationRecord
         tautulli_metadata_workers_resolved: tautulli_metadata_workers_resolved
       },
       tautulli_history_state: tautulli_history_state_summary,
+      tautulli_library_mapping_state: tautulli_library_mapping_state_summary,
       path_mappings: path_mappings.order(:from_prefix).map do |mapping|
         {
           id: mapping.id,
@@ -173,6 +174,27 @@ class Integration < ApplicationRecord
       watermark_id: state["watermark_id"].to_i,
       max_seen_history_id: state["max_seen_history_id"].to_i,
       recent_ids_count: Array(state["recent_ids"]).size
+    }
+  end
+
+  def tautulli_library_mapping_state_summary
+    return nil unless tautulli?
+
+    state = settings_json["library_mapping_state"] || {}
+    libraries = state["libraries"].is_a?(Hash) ? state["libraries"] : {}
+    active_cursors_count = libraries.values.count { |entry| entry.is_a?(Hash) && entry["next_start"].to_i.positive? }
+    completed_cycles = libraries.values.sum do |entry|
+      next 0 unless entry.is_a?(Hash)
+
+      entry["completed_cycle_count"].to_i
+    end
+
+    {
+      present: state.present?,
+      libraries_count: libraries.size,
+      active_cursors_count: active_cursors_count,
+      completed_cycles: completed_cycles,
+      last_run_at: state["last_run_at"]
     }
   end
 

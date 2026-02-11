@@ -270,7 +270,7 @@ RSpec.describe "Api::V1::Integrations", type: :request do
   describe "POST /api/v1/integrations/:id/reset_history_state" do
     before { sign_in_operator! }
 
-    it "clears tautulli history sync state after re-authentication" do
+    it "clears tautulli history and library mapping state after re-authentication" do
       integration = Integration.create!(
         kind: "tautulli",
         name: "Tautulli Resettable",
@@ -281,6 +281,13 @@ RSpec.describe "Api::V1::Integrations", type: :request do
           "history_sync_state" => {
             "watermark_id" => 555,
             "recent_ids" => [ 555, 556 ]
+          },
+          "library_mapping_state" => {
+            "libraries" => {
+              "10" => {
+                "next_start" => 250
+              }
+            }
           }
         }
       )
@@ -291,6 +298,8 @@ RSpec.describe "Api::V1::Integrations", type: :request do
       expect(response).to have_http_status(:ok)
       expect(response.parsed_body["reset"]).to be(true)
       expect(integration.reload.settings_json).not_to have_key("history_sync_state")
+      expect(integration.reload.settings_json).not_to have_key("library_mapping_state")
+      expect(response.parsed_body.dig("integration", "tautulli_library_mapping_state", "present")).to be(false)
     end
 
     it "returns validation error for non-tautulli integrations" do

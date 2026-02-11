@@ -74,7 +74,7 @@ RSpec.describe "Integrations", type: :request do
   end
 
   describe "POST /integrations/:id/reset_history_state" do
-    it "clears tautulli history sync state" do
+    it "clears tautulli history and library mapping sync state" do
       sign_in_operator!
       reauthenticate!
       integration = Integration.create!(
@@ -87,6 +87,13 @@ RSpec.describe "Integrations", type: :request do
           "history_sync_state" => {
             "watermark_id" => 123,
             "recent_ids" => [ 123 ]
+          },
+          "library_mapping_state" => {
+            "libraries" => {
+              "1" => {
+                "next_start" => 100
+              }
+            }
           }
         }
       )
@@ -95,6 +102,7 @@ RSpec.describe "Integrations", type: :request do
 
       expect(response).to redirect_to("/settings")
       expect(integration.reload.settings_json).not_to have_key("history_sync_state")
+      expect(integration.reload.settings_json).not_to have_key("library_mapping_state")
       expect(AuditEvent.order(:created_at).last.payload_json["action"]).to eq("history_state_reset")
     end
 

@@ -62,13 +62,15 @@ module Api
           return render_validation_error(fields: { integration: [ "history state reset is only available for tautulli integrations" ] })
         end
 
-        prior_state = @integration.settings_json["history_sync_state"]
-        if prior_state.blank?
+        prior_history_state = @integration.settings_json["history_sync_state"]
+        prior_library_mapping_state = @integration.settings_json["library_mapping_state"]
+        if prior_history_state.blank? && prior_library_mapping_state.blank?
           return render json: { integration: @integration.as_api_json, reset: false, reason: "already_clear" }
         end
 
         settings = @integration.settings_json.deep_dup
         settings.delete("history_sync_state")
+        settings.delete("library_mapping_state")
         @integration.update!(settings_json: settings)
         record_integration_event("cullarr.integration.updated", @integration, action: "history_state_reset")
 

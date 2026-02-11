@@ -193,6 +193,86 @@ RSpec.describe Sync::SonarrInventorySync, type: :service do
     expect(media_file.path_canonical).to eq("/mnt/shows/Root Mapping Show/Season 01/Second.mkv")
   end
 
+  it "preserves existing plex mapping fields when incoming sonarr payload omits them" do
+    integration = Integration.create!(
+      kind: "sonarr",
+      name: "Sonarr Preserve Plex Keys",
+      base_url: "https://sonarr.preserve.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: { "sonarr_fetch_workers" => 1 }
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(integration, raise_on_unsupported: true).and_return(health_check)
+
+    adapter = instance_double(Integrations::SonarrAdapter)
+    allow(Integrations::SonarrAdapter).to receive(:new).with(integration:).and_return(adapter)
+    allow(adapter).to receive(:fetch_series).and_return(
+      [
+        {
+          sonarr_series_id: 4200,
+          title: "Preserve Show",
+          plex_rating_key: "plex-series-4200",
+          plex_guid: "plex://show/4200",
+          statistics: { total_episode_count: 1, episode_file_count: 1 },
+          metadata: {}
+        }
+      ],
+      [
+        {
+          sonarr_series_id: 4200,
+          title: "Preserve Show",
+          plex_rating_key: nil,
+          plex_guid: nil,
+          statistics: { total_episode_count: 1, episode_file_count: 1 },
+          metadata: {}
+        }
+      ]
+    )
+    allow(adapter).to receive(:fetch_episodes).with(series_id: 4200).and_return(
+      [
+        {
+          sonarr_episode_id: 4201,
+          season_number: 1,
+          episode_number: 1,
+          plex_rating_key: "plex-episode-4201",
+          plex_guid: "plex://episode/4201"
+        }
+      ],
+      [
+        {
+          sonarr_episode_id: 4201,
+          season_number: 1,
+          episode_number: 1,
+          plex_rating_key: nil,
+          plex_guid: nil
+        }
+      ]
+    )
+    allow(adapter).to receive(:fetch_episode_files).with(series_id: 4200).and_return(
+      [
+        {
+          arr_file_id: 4202,
+          sonarr_episode_id: 4201,
+          path: "/data/tv/preserve.mkv",
+          size_bytes: 1,
+          quality: {}
+        }
+      ]
+    )
+
+    described_class.new(sync_run:, correlation_id: "corr-sonarr-preserve-first").call
+    described_class.new(sync_run:, correlation_id: "corr-sonarr-preserve-second").call
+
+    series = Series.find_by!(integration:, sonarr_series_id: 4200)
+    episode = Episode.find_by!(integration:, sonarr_episode_id: 4201)
+    expect(series.plex_rating_key).to eq("plex-series-4200")
+    expect(series.plex_guid).to eq("plex://show/4200")
+    expect(episode.plex_rating_key).to eq("plex-episode-4201")
+    expect(episode.plex_guid).to eq("plex://episode/4201")
+  end
+
   it "seeds phase totals from series statistics before processing children" do
     integration = Integration.create!(
       kind: "sonarr",

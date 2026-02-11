@@ -200,6 +200,68 @@ RSpec.describe Sync::RadarrInventorySync, type: :service do
     expect(adapter).to have_received(:fetch_movie_files).with(movie_id: 1200)
   end
 
+  it "preserves existing plex mapping fields when incoming radarr payload omits them" do
+    integration = Integration.create!(
+      kind: "radarr",
+      name: "Radarr Preserve Plex Keys",
+      base_url: "https://radarr.preserve.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: { "radarr_moviefile_fetch_workers" => 1 }
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(integration, raise_on_unsupported: true).and_return(health_check)
+
+    adapter = instance_double(Integrations::RadarrAdapter)
+    allow(Integrations::RadarrAdapter).to receive(:new).with(integration:).and_return(adapter)
+    allow(adapter).to receive(:fetch_movies).and_return(
+      [
+        {
+          radarr_movie_id: 5100,
+          title: "Preserve Movie",
+          plex_rating_key: "plex-movie-5100",
+          plex_guid: "plex://movie/5100",
+          has_file: true,
+          movie_file_id: 5101,
+          movie_file: {
+            arr_file_id: 5101,
+            radarr_movie_id: 5100,
+            path: "/data/movies/preserve.mkv",
+            size_bytes: 1,
+            quality: {}
+          },
+          metadata: {}
+        }
+      ],
+      [
+        {
+          radarr_movie_id: 5100,
+          title: "Preserve Movie",
+          plex_rating_key: nil,
+          plex_guid: nil,
+          has_file: true,
+          movie_file_id: 5101,
+          movie_file: {
+            arr_file_id: 5101,
+            radarr_movie_id: 5100,
+            path: "/data/movies/preserve.mkv",
+            size_bytes: 1,
+            quality: {}
+          },
+          metadata: {}
+        }
+      ]
+    )
+
+    described_class.new(sync_run:, correlation_id: "corr-radarr-preserve-first").call
+    described_class.new(sync_run:, correlation_id: "corr-radarr-preserve-second").call
+
+    movie = Movie.find_by!(integration:, radarr_movie_id: 5100)
+    expect(movie.plex_rating_key).to eq("plex-movie-5100")
+    expect(movie.plex_guid).to eq("plex://movie/5100")
+  end
+
   it "emits incremental phase progress updates during fetch and fallback lookups" do
     integration = Integration.create!(
       kind: "radarr",
