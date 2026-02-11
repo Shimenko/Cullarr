@@ -68,6 +68,61 @@ If you want quieter logs:
 bin/dev-quiet
 ```
 
+## Optional: expose local app to your Tailnet
+
+If you use Tailscale, you can share your local Cullarr dev app over your tailnet
+without binding Rails to public interfaces.
+
+1. Make sure Tailscale is running and authenticated on this machine.
+2. Make sure **Serve** is enabled for your tailnet in Tailscale admin.
+3. Start Cullarr through the Tailnet launcher:
+
+```bash
+bin/dev-tailnet
+```
+
+Expected behavior:
+- configures `tailscale serve` to proxy to `http://127.0.0.1:3000`
+- detects this device tailnet DNS name (for example `machine-name.your-tailnet.ts.net`)
+- exports `RAILS_DEVELOPMENT_HOSTS` so Rails Host Authorization accepts that host
+
+The launcher prints the Tailnet URL after setup.
+
+No `.env` edits are required for default behavior.
+
+- default target: `https://<this-node>.ts.net` on port `443`
+- default local app port: `3000`
+- optional overrides: `TAILNET_SCHEME`, `TAILNET_PORT`, `PORT`
+
+To stop sharing later:
+
+```bash
+tailscale serve reset
+```
+
+### Tailnet troubleshooting
+
+If you see:
+
+```text
+Serve is not enabled on your tailnet.
+```
+
+Use the URL printed by Tailscale to enable Serve for your tailnet, then rerun:
+
+```bash
+bin/dev-tailnet
+```
+
+If you see:
+
+```text
+Warning: client version "..." != tailscaled server version "..."
+```
+
+Tailscale CLI and daemon are on different builds. This is usually non-fatal.
+To remove the warning, update both to matching versions.
+
 ## 5) Create first operator account
 
 Open:

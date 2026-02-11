@@ -97,6 +97,43 @@ postgresql://cullarr_app:p%40ss%3Aword%231@db.example.com:5432/cullarr_productio
 | `JOB_CONCURRENCY`   | optional                     | `1`                | yes            | worker process concurrency                   |
 | `RAILS_LOG_LEVEL`   | optional                     | `info`             | yes            | runtime log level                            |
 
+## Local Tailnet launcher variables (`bin/dev-tailnet`)
+
+These are optional and used only by the Tailnet dev launcher script.
+For default local Tailnet sharing, you do not need to set any of them.
+
+| Variable          | Default | Restart needed | What it does                                                       |
+|-------------------|---------|----------------|--------------------------------------------------------------------|
+| `TAILNET_SCHEME`  | `https` | yes            | tailnet entry protocol for `tailscale serve` (`https` or `http`)  |
+| `TAILNET_PORT`    | `443`   | yes            | tailnet listener port (`80` default when `TAILNET_SCHEME=http`)   |
+| `PORT`            | `3000`  | yes            | local Rails port proxied by `tailscale serve`                     |
+
+Example:
+
+```dotenv
+TAILNET_SCHEME=https
+TAILNET_PORT=443
+PORT=3000
+```
+
+Run:
+
+```bash
+cd /path/to/cullarr
+bin/dev-tailnet
+```
+
+Prerequisites:
+- Tailscale is authenticated on this machine
+- Serve is enabled for your tailnet in Tailscale admin
+- if Serve is disabled, Tailscale will print an enable URL
+
+Stop sharing:
+
+```bash
+tailscale serve reset
+```
+
 ## Advanced variables (usually leave unset)
 
 | Variable                        | Typical value   | Restart needed | When to use it                                     | Should most users set this? |

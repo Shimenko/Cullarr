@@ -28,6 +28,10 @@ Open:
 - [http://localhost:3000/session/new](http://localhost:3000/session/new) to create/sign in operator account
 - [http://localhost:3000/up](http://localhost:3000/up) for liveness check (`200` expected)
 
+Optional (Tailnet):
+- Run `bin/dev-tailnet` instead of `bin/dev` to expose your local app to your Tailscale tailnet via `tailscale serve`
+- Stop sharing with `tailscale serve reset`
+
 ## Quick Start (Docker Compose)
 
 ```bash

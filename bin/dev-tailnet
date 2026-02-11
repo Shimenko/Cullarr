@@ -1,0 +1,67 @@
+#!/usr/bin/env sh
+
+set -eu
+
+TAILSCALE_BIN="${TAILSCALE_BIN:-tailscale}"
+PORT="${PORT:-3000}"
+TAILNET_SCHEME="${TAILNET_SCHEME:-https}"
+TAILNET_PORT="${TAILNET_PORT:-}"
+DEV_COMMAND="${CULLARR_DEV_COMMAND:-bin/dev}"
+
+if ! command -v "$TAILSCALE_BIN" >/dev/null 2>&1; then
+  echo "error: tailscale CLI not found. Install Tailscale and ensure '$TAILSCALE_BIN' is on PATH." >&2
+  exit 1
+fi
+
+case "$TAILNET_SCHEME" in
+  https)
+    TAILNET_PORT="${TAILNET_PORT:-443}"
+    ;;
+  http)
+    TAILNET_PORT="${TAILNET_PORT:-80}"
+    ;;
+  *)
+    echo "error: TAILNET_SCHEME must be either 'https' or 'http'." >&2
+    exit 1
+    ;;
+esac
+
+if ! TAILNET_HOST="$(
+  "$TAILSCALE_BIN" status --json \
+    | ruby -rjson -e 'data = JSON.parse(STDIN.read); host = data.fetch("Self", {}).fetch("DNSName", "").sub(/\.$/, ""); abort("missing tailnet DNSName") if host.empty?; puts(host)'
+)"; then
+  echo "error: could not determine this device tailnet DNS name. Make sure Tailscale is up and authenticated." >&2
+  exit 1
+fi
+
+if [ -z "$TAILNET_HOST" ]; then
+  echo "error: could not determine this device tailnet DNS name. Make sure Tailscale is up and authenticated." >&2
+  exit 1
+fi
+
+if [ "$TAILNET_SCHEME" = "https" ]; then
+  "$TAILSCALE_BIN" serve --yes --bg --https="$TAILNET_PORT" "http://127.0.0.1:${PORT}"
+  if [ "$TAILNET_PORT" = "443" ]; then
+    TAILNET_URL="https://${TAILNET_HOST}"
+  else
+    TAILNET_URL="https://${TAILNET_HOST}:${TAILNET_PORT}"
+  fi
+else
+  "$TAILSCALE_BIN" serve --yes --bg --http="$TAILNET_PORT" "http://127.0.0.1:${PORT}"
+  TAILNET_URL="http://${TAILNET_HOST}:${TAILNET_PORT}"
+fi
+
+if [ -n "${RAILS_DEVELOPMENT_HOSTS:-}" ]; then
+  case ",${RAILS_DEVELOPMENT_HOSTS}," in
+    *",${TAILNET_HOST},"*) ;;
+    *) export RAILS_DEVELOPMENT_HOSTS="${RAILS_DEVELOPMENT_HOSTS},${TAILNET_HOST}" ;;
+  esac
+else
+  export RAILS_DEVELOPMENT_HOSTS="${TAILNET_HOST}"
+fi
+
+echo "Tailnet proxy configured: ${TAILNET_URL}"
+echo "Host allowlist: RAILS_DEVELOPMENT_HOSTS=${RAILS_DEVELOPMENT_HOSTS}"
+echo "To stop sharing this app over your tailnet: ${TAILSCALE_BIN} serve reset"
+
+exec "$DEV_COMMAND" "$@"
