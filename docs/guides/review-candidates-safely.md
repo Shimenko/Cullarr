@@ -1,132 +1,119 @@
 # Review Candidates Safely
 
-This guide focuses on candidate review only.
-
-It does not execute deletion flows.
+This guide helps you interpret candidates confidently before any deletion planning.
 
 > [!IMPORTANT]
-> Keep deletion mode disabled unless you intentionally need destructive execution and have completed your own safety sign-off.
+> This guide is review-only. It does not require delete mode unlock.
 
-## Goal
+## What candidate blockers mean in plain terms
 
-By the end of this guide, you should be able to:
-- filter candidates by scope and watched semantics
-- understand why rows are eligible or blocked
-- use mapping, blocker, and risk signals to validate trust in results
+- **Protected path**: file path matches a path exclusion rule
+- **Keep marker**: this item was explicitly marked "keep"
+- **In progress**: selected user playback is still in progress
+- **Ambiguous mapping**: metadata points to conflicting possible matches
+- **Ambiguous ownership**: more than one integration appears to claim the same file path
 
-## Step 1: Open the Candidates page
+## 1) Open candidates page
 
-Go to `http://localhost:3000/candidates`.
+Go to:
+- `http://localhost:3000/candidates`
 
-At the top, review filter controls:
-- **Scope**
-- **Watched Match** (`all`, `any`, `none` semantics)
-- **Include blocked candidates**
+Main filters:
+- scope (`movie`, `tv_episode`, `tv_season`, `tv_show`)
+- watched match mode
+- include blocked candidates
 - Plex user checkboxes
 
-## Step 2: Start with strict defaults
+## 2) Understand user checkbox behavior
 
-Recommended first pass:
-- Scope: `movie`
-- Watched Match: default
-- Include blocked candidates: unchecked
-- Plex users: leave blank to include all synced users
+If you select Plex users, watched logic uses only that selected user set.
+
+Watched match modes:
+- `all`: every selected user must be watched
+- `any`: at least one selected user watched
+- `none`: none of the selected users should be in watched state
+
+If no users are selected, Cullarr uses all synced users.
+
+## 3) Understand season/show scope behavior
+
+Season/show scope is determined from episode-level data.
+
+Plainly:
+- a season/show row represents many underlying episode rows
+- if underlying episodes contain blockers, the season/show row can become non-actionable
+
+## 4) Start with strict filters
+
+Suggested first pass:
+- scope: `movie`
+- watched match: `all` or default
+- include blocked: unchecked
 
 Click **Apply Filters**.
 
-## Step 3: Read diagnostics first
+## 5) Read the summary cards first
 
-The diagnostics cards explain what Cullarr filtered out:
-- Rows scanned
-- Filtered by watched rule
-- Filtered by blockers
-- Active watched mode
+Cards show:
+- rows scanned
+- filtered by watched rule
+- filtered by blockers
+- active watched mode
 
-Use this to understand whether your filters are too strict or data is still incomplete.
+Use these to quickly diagnose “why is list empty?” before changing many settings.
 
-## Step 4: Inspect row status signals
+## 6) Interpret candidate rows
 
-Each row includes status chips and flags.
+Each row shows:
+- eligibility state
+- mapping status
+- risk flags
+- blocker flags
+- reason list
+- media file IDs
 
-### Eligibility state
+### What "needs review" usually means
 
-- `Eligible`: actionable for planning
-- `Blocked`: prevented by one or more guardrails
+Most often:
+- path mapping mismatch
+- conflicting external IDs
+- same path reported by multiple sources
 
-### Mapping state
+## 7) Understand protected paths
 
-Look for mapping chips and hints such as:
-- mapped
-- needs review
-- unmapped
-- rollup conflict indicators
+Protected paths are configured in **Path Exclusions** (Settings page).
 
-### Risk flags
+If a candidate path starts with a protected prefix, that item is blocked.
 
-Risk flags indicate rows that need extra human review before action.
+Use protected paths for locations you never want Cullarr to touch (for example family/kids folders).
 
-### Blockers
+## 8) Understand keep markers
 
-Common blocker classes:
-- path excluded
-- keep marker present
-- in-progress playback
-- ambiguous mapping
-- ambiguous ownership
+Keep markers are explicit “never delete this” flags attached to movies/episodes/seasons/series.
 
-## Step 5: Use include-blocked mode to audit guardrails
+If a keep marker exists on the relevant item (or parent where applicable), candidate is blocked.
 
-Enable **Include blocked candidates** and apply filters again.
+## 9) Use include-blocked mode as validation tool
 
-This view is useful for validating that guardrails are blocking the right content.
+Enable **Include blocked candidates** and re-run filters.
 
-Questions to ask:
-- Are protected paths blocked as expected?
-- Are in-progress items blocked as expected?
-- Are mapping conflicts visible and explainable?
+Now you can validate that blockers are working exactly as intended.
 
-## Step 6: Inspect reasons and media file context
+## 10) If results look wrong
 
-Expand **Reasons and file context** for any row.
+1. Review path mappings in Settings.
+2. Run sync again.
+3. Compare blocker reasons before/after.
+4. Re-check user filter selection and watched match mode.
 
-Use this section to trace:
-- why the row was scored that way
-- which media file IDs are associated
-- whether the scope rollup is behaving as expected
+## Settings that strongly affect candidate output
 
-## Step 7: Stop before deletion actions
+- `watched_mode`
+- `watched_percent_threshold`
+- `in_progress_min_offset_ms`
+- path exclusions
+- keep markers
+- integration compatibility status
 
-For safe review-only workflow:
-- do not enter delete mode password
-- do not unlock delete mode
-- do not run deletion plan or execution
-
-You can still fully validate candidate quality without performing destructive operations.
-
-## Common interpretation patterns
-
-### "No candidates available"
-
-Potential causes:
-- watch filters too strict
-- blockers filtering everything
-- data not synced yet
-
-Actions:
-1. run sync again
-2. broaden watched match mode
-3. include blocked candidates to inspect why rows were removed
-
-### Many rows marked "needs review"
-
-This often indicates path mapping quality issues.
-
-Actions:
-1. open Settings -> Mapping Health
-2. review ambiguous canonical path metrics
-3. add/fix integration path mappings
-4. re-run sync
-
-## Next step
-
-If candidate output looks wrong, use [troubleshooting/common-issues.md](../troubleshooting/common-issues.md).
+For details see:
+- [configuration/application-settings.md](../configuration/application-settings.md)

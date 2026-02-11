@@ -1,8 +1,8 @@
 # Candidate Policy
 
-This page explains how Cullarr decides whether media appears as an eligible candidate, blocked candidate, or non-candidate.
+This page explains how Cullarr decides whether something is actionable, blocked, or filtered out.
 
-## Scope model
+## Supported scopes
 
 Cullarr supports four scopes:
 - movie
@@ -10,65 +10,100 @@ Cullarr supports four scopes:
 - TV season
 - TV show
 
-Rollup scopes (season/show) are strict rollups over episode-level behavior.
+TV season/show are strict aggregate scopes built from episode-level decisions.
 
-## Watched decision model
+## Watched decision rules
 
-### Mode: `play_count`
+Cullarr supports two watched modes:
 
-A watch is counted when play count is at least 1.
+- `play_count`: watched when play count is at least 1
+- `percent`: watched when max view offset reaches configured threshold
 
-### Mode: `percent`
+`watched_percent_threshold` controls the required percent for `percent` mode.
 
-A watch is counted when max view offset / duration reaches configured threshold.
+## User checkbox behavior
 
-`watched_percent_threshold` controls the required percentage.
+When you select Plex users in filters, those users become the watched-evaluation set.
 
-## User selection semantics
+`watched_match_mode` controls how that set is evaluated:
+- `all`: every selected user must be watched
+- `any`: at least one selected user must be watched
+- `none`: selected users are used to find not-watched cases
 
-Filters support selecting specific Plex users.
+If no users are selected, Cullarr uses all known Plex users as the effective set.
 
-Watched match mode controls how selected users are combined:
-- `all`: all selected users must satisfy watched condition
-- `any`: at least one selected user must satisfy watched condition
-- `none`: user filter is not used for watched match
+## Watched prefilter behavior
 
-## Guardrails and blockers
+Before full row scoring, Cullarr may apply watched prefiltering.
 
-A row is blocked when one or more blocker flags are present, for example:
-- path exclusion
-- keep marker
-- in-progress playback
-- ambiguous mapping
-- ambiguous ownership
+Current behavior:
+- applies to movie and episode scopes
+- mainly when watched mode is `play_count`
+- can eliminate rows before detailed scoring
 
-Blocked rows can be included in UI for visibility but stay non-actionable.
+If your result set is unexpectedly empty, check diagnostics for `watched_prefilter_applied`.
 
-## Mapping status and risk
+## Blockers (why rows are non-actionable)
 
-Candidate rows include mapping status and risk cues so operators can judge confidence.
+Common blocker flags:
+- `path_excluded`
+- `keep_marked`
+- `in_progress_any`
+- `ambiguous_mapping`
+- `ambiguous_ownership`
+- `rollup_not_strictly_eligible` (season/show)
 
-Common mapping states:
-- mapped
-- unmapped
-- needs review
+A blocked row can still be shown when `include_blocked=true`, but Cullarr will not execute it until blockers are resolved.
 
-Why this matters:
-- mapping uncertainty can produce ownership ambiguity
-- ownership ambiguity is a blocker for destructive execution
+## Keep markers and protected paths
+
+## Keep marker
+
+A keep marker is an explicit “do not delete” marker attached to a movie/episode/season/series context.
+
+## Protected path
+
+A protected path comes from `path_exclusions` and blocks deletion for matching path prefixes.
+
+Both are hard safety signals.
+
+## Mapping and ownership ambiguity
+
+## Ambiguous mapping
+
+Cullarr cannot confidently map integration/Plex identity for this item.
+
+## Ambiguous ownership
+
+The same normalized path appears to be owned by more than one integration context.
+
+Both ambiguity types are treated as blockers to avoid accidental deletion.
 
 ## Multi-version behavior
 
-Rows with multiple version groups require explicit media file selection before planning execution.
+Some candidates include multiple media files (multiple versions).
 
-Implicit all-version execution is intentionally rejected.
+Cullarr requires explicit version/file selection in that case.
 
-## Explainability contract
+If you skip explicit selection, planning returns:
+- `multi_version_selection_required`
 
-Each row can include:
-- human-readable reasons
-- risk flags
-- blocker flags
-- media file IDs
+## TV season/show strictness explained
 
-Cullarr prioritizes explainability so policy outcomes are auditable and understandable by humans.
+For season/show scope, Cullarr computes eligibility from underlying episodes.
+
+If any episode is blocked or does not meet watched criteria, the season/show aggregate is not considered strictly eligible.
+
+This is intentional: partial eligibility should not look like a clean “delete all.”
+
+## Why these rules exist
+
+Cullarr policy favors explainable safety over silent assumptions.
+
+The objective is predictable behavior you can audit and trust.
+
+## Related docs
+
+- `/path/to/cullarr/docs/concepts/sync-and-query-flow.md`
+- `/path/to/cullarr/docs/guides/review-candidates-safely.md`
+- `/path/to/cullarr/docs/reference/error-codes.md`

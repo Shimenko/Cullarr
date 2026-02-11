@@ -1,69 +1,87 @@
 # Safety Model
 
-Cullarr is designed to fail closed for destructive workflows.
+Cullarr is designed to protect you from accidental destructive actions.
 
-## Core principles
+This page explains what gets blocked, why it gets blocked, and what you can do next.
 
-1. Authentication is required for all meaningful operations.
-2. Delete mode is disabled by default.
+## Core safety rules
+
+1. You must be signed in.
+2. Delete mode is off by default.
 3. Sensitive actions require recent re-authentication.
 4. Guardrails are checked twice:
-   - when candidates are listed
+   - when candidates are shown
    - again when deletion actions execute
 
-## Why double guardrails matter
+That second check matters because data can change between review and execution.
 
-Candidate lists are snapshots in time.
-Data can change between listing and execution (watch progress, mappings, ownership signals).
+## What counts as a sensitive action
 
-Re-checking guardrails at execution prevents stale-list unsafe actions.
+Cullarr asks for recent re-authentication for actions like:
+- integration create/update/delete
+- integration history-state reset
+- destructive retention setting updates
+- delete-mode unlock requests
 
-## Guardrail categories
+If re-auth is stale, API returns `forbidden` with a message that recent re-authentication is required.
 
-A target can be blocked when any of these conditions are true:
+## Delete mode gate (intentional friction)
 
-- path exclusion matches
-- keep marker exists
-- selected users have in-progress playback
-- mapping is ambiguous
-- ownership is ambiguous
-
-## Delete mode gate
-
-Delete execution is gated by:
+Delete execution is allowed only when all checks pass:
 - `CULLARR_DELETE_MODE_ENABLED=true`
-- configured `CULLARR_DELETE_MODE_SECRET`
-- valid short-lived unlock token
-- correct operator identity
-- non-expired unlock token
+- `CULLARR_DELETE_MODE_SECRET` is configured
+- a valid unlock token is provided
+- unlock token is unexpired and tied to valid operator context
 
-If any gate fails, deletion planning/execution returns explicit error codes such as:
+Common failures:
 - `delete_mode_disabled`
 - `delete_unlock_required`
 - `delete_unlock_invalid`
 - `delete_unlock_expired`
 
-## Re-authentication gate
+## Guardrails that block deletion
 
-Sensitive actions depend on a short re-authentication window (default 15 minutes):
-- integration mutation
-- destructive retention updates
-- delete unlock flow
+Cullarr blocks actions when any of these safety conditions are present:
+- path is excluded (`path_excluded`)
+- keep marker exists (`keep_marked`)
+- selected users have in-progress playback (`in_progress_any`)
+- mapping confidence is ambiguous (`ambiguous_mapping`)
+- file ownership appears ambiguous across integrations (`ambiguous_ownership`)
 
-This limits risk from long-lived unattended sessions.
+These map to API codes such as `guardrail_keep_marker`, `guardrail_ambiguous_mapping`, and `guardrail_ambiguous_ownership`.
 
-## Explainability and audit
+## What ambiguity means
+
+## Ambiguous mapping
+
+Cullarr cannot confidently link integration-side metadata/path context to a stable Plex-linked identity.
+
+## Ambiguous ownership
+
+The same normalized path appears under multiple integration owners, so Cullarr cannot safely decide which owner should drive deletion.
+
+In both cases, Cullarr blocks execution by design.
+
+## Why keep markers and protected paths exist
+
+- Keep markers let you say “never remove this item” even if watch rules would normally make it eligible.
+- Path exclusions let you protect entire path prefixes from destructive actions.
+
+These are intentional override rails for library layout realities.
+
+## Explainability and auditing
 
 Cullarr records audit events for key security and workflow transitions.
-API error responses include:
+
+API errors include:
 - stable `error.code`
-- human-readable message
-- `correlation_id`
+- readable `error.message`
+- `correlation_id` for tracing
 
-This improves incident tracing and operator confidence.
+This makes blocked behavior easier to debug and safer to operate.
 
-## Safe-by-default behavior summary
+## Related docs
 
-- Review workflows are available without enabling delete mode.
-- Guardrail uncertainty is surfaced, not hidden.
-- Destructive execution requires explicit, recent, authenticated intent.
+- `/path/to/cullarr/docs/reference/error-codes.md`
+- `/path/to/cullarr/docs/guides/review-candidates-safely.md`
+- `/path/to/cullarr/docs/troubleshooting/common-issues.md`

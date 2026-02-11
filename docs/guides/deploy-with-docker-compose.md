@@ -1,8 +1,26 @@
-# Deploy With Docker Compose
+# Run With Docker Compose
 
-Cullarr ships with two Docker Compose profiles:
+Cullarr provides two compose profiles:
 - `sqlite`
 - `postgres`
+
+If you prefer local app run (non-Docker), use:
+- [Local setup](../getting-started/local-setup.md)
+
+## Before You Begin
+
+From repository root:
+
+```bash
+cd /path/to/cullarr
+```
+
+You need:
+- Docker + Docker Compose
+- available host port (default `3000`)
+- secrets ready (`SECRET_KEY_BASE`, encryption keys)
+
+## Services in each profile
 
 Both profiles run:
 - `web`
@@ -12,95 +30,76 @@ Both profiles run:
 `postgres` profile also runs:
 - `postgres`
 
-## Choose a profile
+`db-init` runs `bin/rails db:prepare` before app services start. This prevents two services trying to prepare DB at same time.
 
-Use `sqlite` when you want simpler single-host deployment.
+## 1) Start sqlite profile
 
-Use `postgres` when you want stronger concurrent behavior and explicit role-separated production databases.
-
-## Prerequisites
-
-- Docker and Docker Compose installed
-- Ports available (`3000` default)
-- Repository checked out on host
-
-## Deploy with SQLite profile
-
-### 1) Prepare env file
+Copy env file:
 
 ```bash
 cp .env.compose.sqlite.example .env.compose.sqlite
 ```
 
-Edit `.env.compose.sqlite`:
-- set `SECRET_KEY_BASE`
-- set encryption keys
-- keep delete mode disabled unless intentionally enabling
+Edit required values in `.env.compose.sqlite`.
 
-### 2) Start services
+Start:
 
 ```bash
 docker compose --profile sqlite --env-file .env.compose.sqlite up --build -d
 ```
 
-### 3) Verify services
+Check service states:
 
 ```bash
 docker compose --profile sqlite --env-file .env.compose.sqlite ps
 ```
 
-Expected:
-- `db-init` exits successfully
-- `web` and `worker` are healthy/running
+## 2) Start postgres profile
 
-## Deploy with Postgres profile
-
-### 1) Prepare env file
+Copy env file:
 
 ```bash
 cp .env.compose.postgres.example .env.compose.postgres
 ```
 
-Edit `.env.compose.postgres`:
+Edit `.env.compose.postgres` and change defaults:
+- replace `POSTGRES_PASSWORD`
+- replace app DB URL credentials
 - set `SECRET_KEY_BASE`
 - set encryption keys
-- set all four `PRODUCTION_*_DATABASE_URL` values
-- confirm all four URLs are unique
 
-### 2) Start services
+Start:
 
 ```bash
 docker compose --profile postgres --env-file .env.compose.postgres up --build -d
 ```
 
-### 3) Verify services
+Check service states:
 
 ```bash
 docker compose --profile postgres --env-file .env.compose.postgres ps
 ```
 
-Expected:
-- `postgres` healthy
-- `db-init` exits successfully
-- `web` and `worker` healthy/running
+## 3) Use existing Postgres databases
 
-## Why `db-init` exists
+If you already have Postgres running, point `PRODUCTION_*_DATABASE_URL` to those DBs.
 
-`db-init` runs `bin/rails db:prepare` before web and worker start.
+Requirements:
+- all 4 role DB URLs provided
+- DB URLs are unique
+- DB user has permission to create/update tables in those DBs
 
-This avoids startup races where multiple app services attempt schema preparation at the same time.
+Then run DB prepare (inside app container):
 
-## Health checks
+```bash
+docker compose --profile postgres --env-file .env.compose.postgres run --rm web bin/rails db:prepare
+```
 
-Use both checks:
+`db:prepare` will create schema objects/tables as needed.
 
-1. Liveness check (no auth):
-`GET /up`
+## 4) Verify running services
 
-2. API health check (auth required):
-`GET /api/v1/health`
-
-### Example smoke checks
+Basic checks:
 
 ```bash
 curl -i http://localhost:3000/up
@@ -109,21 +108,54 @@ curl -i http://localhost:3000/up
 Expected:
 - `HTTP/1.1 200 OK`
 
-`/api/v1/health` requires an authenticated session cookie. If called unauthenticated, expect `401`.
+Also verify sign-in and `/runs` UI.
 
-## Update workflow
+`/api/v1/health` requires authenticated session. Unauthenticated request should return `401`.
 
-When updating to a new image/build:
+## 5) View logs
+
+Tail all services:
 
 ```bash
-docker compose --profile <sqlite|postgres> --env-file <file> pull
-docker compose --profile <sqlite|postgres> --env-file <file> up -d --build
+docker compose --profile <sqlite|postgres> --env-file <env-file> logs -f
 ```
 
-Then run the same smoke checks.
+Tail one service:
 
-## Related guides
+```bash
+docker compose --profile <sqlite|postgres> --env-file <env-file> logs -f web
+```
 
-- [Environment variables](../configuration/environment-variables.md)
+## 6) Open a shell in container
+
+```bash
+docker compose --profile <sqlite|postgres> --env-file <env-file> exec web sh
+```
+
+Useful commands inside web container:
+
+```bash
+bin/rails db:prepare
+bin/rails c
+bin/rails runner 'puts SyncRun.count'
+```
+
+## 7) Restart after env changes
+
+If you edit `.env.compose.*`, restart services:
+
+```bash
+docker compose --profile <sqlite|postgres> --env-file <env-file> up -d --build
+```
+
+## 8) Stop services cleanly
+
+```bash
+docker compose --profile <sqlite|postgres> --env-file <env-file> down
+```
+
+## Next documents
+
 - [Backup and restore](backup-and-restore.md)
+- [Environment variables](../configuration/environment-variables.md)
 - [Troubleshooting](../troubleshooting/common-issues.md)

@@ -1,145 +1,118 @@
 # Cullarr
 
-Cullarr helps you review media deletion candidates safely by combining:
-- Sonarr and Radarr library inventory
-- Tautulli watch history
-- explicit guardrails and operator review signals
+Cullarr helps you decide what media is safe to remove.
 
-It is designed to be safe first, fast second.
+It combines data from:
+- Sonarr
+- Radarr
+- Tautulli
+
+In this documentation, an **integration** means one Sonarr, Radarr, or Tautulli instance. You can add multiple instances of each.
 
 > [!IMPORTANT]
-> Cullarr does not run automatic scheduled deletion by default.
-> Delete mode is disabled by default and destructive paths are explicitly gated.
+> Delete mode is disabled by default. You can run Cullarr safely for sync + candidate review without enabling deletion execution.
 
-## What you get
+## Quick Start (Local)
 
-- Candidate review UI with blockers, risk flags, and reason details
-- Integration health checks and compatibility signals
-- Sync run tracking with live progress
-- File-level deletion planning workflow (guarded)
-
-## 5-minute local start
-
-### 1) Install gems
+Run from the repository root:
 
 ```bash
+cd /path/to/cullarr
 bundle install
-```
-
-### 2) Create `.env`
-
-```bash
 cp .env.example .env
-```
-
-For first run, keep DB URL variables commented out to use SQLite.
-
-### 3) Prepare database
-
-```bash
 bin/rails db:prepare
-```
-
-### 4) Start app + worker + CSS watcher
-
-```bash
 bin/dev
 ```
 
-### 5) Open and bootstrap login
+Open:
+- [http://localhost:3000/session/new](http://localhost:3000/session/new) to create/sign in operator account
+- [http://localhost:3000/up](http://localhost:3000/up) for liveness check (`200` expected)
 
-- Open [http://localhost:3000/session/new](http://localhost:3000/session/new)
-- Create first operator account (one-time bootstrap)
-
-### 6) Quick health check
-
-- [http://localhost:3000/up](http://localhost:3000/up) should return `200`
-- [http://localhost:3000/runs](http://localhost:3000/runs) should load after sign-in
-
-## Database configuration
-
-Cullarr uses four database roles per environment:
-- `primary`
-- `cache`
-- `queue`
-- `cable`
-
-### SQLite (default)
-
-If all DB URL variables in an environment are unset, SQLite files in `storage/` are used.
-
-### Postgres (strict mode)
-
-If any URL in a group is set, all 4 URLs in that group are required.
-All configured URLs must be unique across all groups.
-
-Development group:
-- `DATABASE_URL`
-- `CACHE_DATABASE_URL`
-- `QUEUE_DATABASE_URL`
-- `CABLE_DATABASE_URL`
-
-Test group:
-- `TEST_DATABASE_URL`
-- `TEST_CACHE_DATABASE_URL`
-- `TEST_QUEUE_DATABASE_URL`
-- `TEST_CABLE_DATABASE_URL`
-
-Production group:
-- `PRODUCTION_DATABASE_URL`
-- `PRODUCTION_CACHE_DATABASE_URL`
-- `PRODUCTION_QUEUE_DATABASE_URL`
-- `PRODUCTION_CABLE_DATABASE_URL`
-
-Example development group:
+## Quick Start (Docker Compose)
 
 ```bash
-export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/cullarr_development
-export CACHE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/cullarr_cache_development
-export QUEUE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/cullarr_queue_development
-export CABLE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/cullarr_cable_development
-bin/rails db:prepare
+cd /path/to/cullarr
+cp .env.compose.sqlite.example .env.compose.sqlite
+docker compose --profile sqlite --env-file .env.compose.sqlite up --build -d
 ```
 
-## Required production security variables
+Then open:
+- [http://localhost:3000/session/new](http://localhost:3000/session/new)
+- [http://localhost:3000/up](http://localhost:3000/up)
+
+## What Cullarr Does
+
+- Syncs inventory + watch data from integrations
+- Shows candidates with clear reasons, blockers, and risk indicators
+- Blocks destructive actions when safety conditions fail
+- Tracks run status and errors with correlation IDs
+
+## Safety At A Glance
+
+- Delete mode: off by default
+- Re-authentication required for sensitive actions
+- Candidate blockers checked again at execution time
+- Protected path prefixes can be configured
+- Keep markers can block specific media from deletion
+
+## Postgres And SQLite
+
+Cullarr supports both:
+- SQLite (simple local/self-host defaults)
+- Postgres (recommended for larger libraries and concurrency)
+
+Each environment uses four DB roles (`primary`, `cache`, `queue`, `cable`).
+If any DB URL is set in a group, all four are required, and all configured URLs must be unique.
+
+## Required Production Secrets
 
 - `SECRET_KEY_BASE`
 - `ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEYS`
 - `ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY`
 - `ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT`
 
-Generate encryption starter values with:
+Generate starter values:
+
+Local app run:
 
 ```bash
+cd /path/to/cullarr
+bin/rails secret
 bin/rails db:encryption:init
 ```
 
-## Deploy with Docker Compose
+Docker Compose:
+
+```bash
+cd /path/to/cullarr
+docker compose --profile <sqlite|postgres> --env-file <env-file> run --rm web bin/rails secret
+docker compose --profile <sqlite|postgres> --env-file <env-file> run --rm web bin/rails db:encryption:init
+```
+
+## Docker Compose
 
 Profiles:
 - `sqlite`
 - `postgres`
 
-Start with:
+Run/start guide:
 - [docs/guides/deploy-with-docker-compose.md](docs/guides/deploy-with-docker-compose.md)
 
-## Documentation map
+## Documentation
 
-Start at [docs/README.md](docs/README.md).
+Main index:
+- [docs/README.md](docs/README.md)
 
-| Task | Document |
-| --- | --- |
-| Local setup | [docs/getting-started/local-setup.md](docs/getting-started/local-setup.md) |
-| Connect integrations + run first sync | [docs/guides/connect-integrations-and-run-sync.md](docs/guides/connect-integrations-and-run-sync.md) |
-| Review candidates safely | [docs/guides/review-candidates-safely.md](docs/guides/review-candidates-safely.md) |
-| Environment variables | [docs/configuration/environment-variables.md](docs/configuration/environment-variables.md) |
-| Application settings | [docs/configuration/application-settings.md](docs/configuration/application-settings.md) |
-| Troubleshooting | [docs/troubleshooting/common-issues.md](docs/troubleshooting/common-issues.md) |
-| API reference | [docs/reference/api.md](docs/reference/api.md) |
+Recommended reading order:
+1. [docs/getting-started/local-setup.md](docs/getting-started/local-setup.md)
+2. [docs/guides/connect-integrations-and-run-sync.md](docs/guides/connect-integrations-and-run-sync.md)
+3. [docs/guides/review-candidates-safely.md](docs/guides/review-candidates-safely.md)
+4. [docs/configuration/environment-variables.md](docs/configuration/environment-variables.md)
 
-## Verification commands
+## Verification Commands
 
 ```bash
+cd /path/to/cullarr
 bundle install && \
   bin/rails db:prepare && \
   bundle exec rubocop && \

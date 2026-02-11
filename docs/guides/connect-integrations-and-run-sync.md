@@ -1,127 +1,167 @@
 # Connect Integrations And Run Your First Sync
 
-Use this guide after local setup to connect Sonarr, Radarr, and Tautulli, then run your first sync safely.
+Use this guide after local setup.
 
-## Before you start
+In this guide, **integration** means one Sonarr, Radarr, or Tautulli server. You can add multiple integrations of the same type.
 
-You should already have:
-- Cullarr running (`bin/dev`)
-- an operator account
-- URLs and API keys for your integration instances
+## Before You Start
+
+Run from repo root:
+
+```bash
+cd /path/to/cullarr
+```
+
+Make sure:
+- Cullarr is running (`bin/dev`)
+- you can sign in
+- you have base URLs + API keys for each integration
 
 Recommended order:
 1. Sonarr
 2. Radarr
 3. Tautulli
 
-## Step 1: Re-authenticate for sensitive actions
+## 1) Re-authenticate first
 
 Integration create/update/delete actions require recent re-authentication.
 
 1. Open `http://localhost:3000/settings`
-2. In **Security**, use **Re-authenticate** with your password.
-3. Confirm success message: `Re-authentication successful for sensitive actions.`
+2. In **Security**, enter password and click **Re-authenticate**
+3. Confirm message: `Re-authentication successful for sensitive actions.`
 
-## Step 2: Add Sonarr
+## 2) Add Sonarr integration
 
-In **Settings** -> **Integrations** -> **Add Integration**:
+Settings -> Integrations -> Add Integration:
 
 - Kind: `sonarr`
 - Name: `Sonarr Main`
 - Base URL: `http://sonarr.local:8989`
-- API Key: `<your sonarr api key>`
+- API Key: your Sonarr API key
 - Compatibility Mode: `Strict latest`
-- Request Timeout (seconds): `15`
+- Request Timeout: `15`
 - Retry Attempts: `5`
 - Sonarr Fetch Workers: `4` (or `0` for auto)
-- Verify SSL: enabled when using HTTPS with a valid cert
+- Verify SSL: enabled for trusted HTTPS endpoints
 
 Click **Add Integration**.
 
-## Step 3: Add Radarr
+## 3) Add Radarr integration
 
-Use the same form:
+Use same form:
 
 - Kind: `radarr`
 - Name: `Radarr Main`
 - Base URL: `http://radarr.local:7878`
-- API Key: `<your radarr api key>`
+- API Key: your Radarr API key
 - Compatibility Mode: `Strict latest`
-- Request Timeout (seconds): `15`
+- Request Timeout: `15`
 - Retry Attempts: `5`
 - Radarr MovieFile Workers: `4` (or `0` for auto)
-- Verify SSL: enabled when appropriate
+- Verify SSL: enabled for trusted HTTPS endpoints
 
 Click **Add Integration**.
 
-## Step 4: Add Tautulli
-
-Use the same form:
+## 4) Add Tautulli integration
 
 - Kind: `tautulli`
 - Name: `Tautulli Main`
 - Base URL: `http://tautulli.local:8181`
-- API Key: `<your tautulli api key>`
+- API Key: your Tautulli API key
 - Compatibility Mode: `Strict latest`
-- Request Timeout (seconds): `15`
+- Request Timeout: `15`
 - Retry Attempts: `5`
 - Tautulli History Page Size: `500`
 - Tautulli Metadata Workers: `4` (or `0` for auto)
-- Verify SSL: enabled when appropriate
 
 Click **Add Integration**.
 
-## Step 5: Add path mappings when paths differ
+## Compatibility mode explained clearly
 
-If integration-reported file paths do not match your canonical local paths, add mappings per integration.
+Compatibility mode is about the version running on your integration server.
 
-Example mapping:
+Cullarr checks reported integration version and behavior contract.
 
-- From Prefix: `/data/media`
-- To Prefix: `/mnt/media`
+- `strict_latest`: if integration version/contract is not supported, Cullarr blocks destructive support.
+- `warn_only_read_only`: Cullarr can still read/sync with warning status, but destructive support stays disabled.
 
-Rule of thumb:
-- Add the most specific mappings first.
-- Use root mapping (`/`) only when you intentionally want a broad global translation.
+Use `warn_only_read_only` only if you intentionally accept reduced guarantees while upgrading integrations.
 
-## Step 6: Run health checks
+## 5) Configure path mappings (important)
+
+Path mappings tell Cullarr how to translate paths reported by integrations to the real file locations on disk used in your environment.
+
+Think of it as:
+- **From Prefix** = path string reported by integration data
+- **To Prefix** = real on-disk path root that should match this environment
+
+Direction matters:
+- map from integration-reported path format to your actual local disk path format
+- not the other way around
+
+Example 1:
+- From Prefix: `/data/media/movies`
+- To Prefix: `/mnt/media/movies`
+
+Example 2 (container vs host style):
+- From Prefix: `/tv`
+- To Prefix: `/media/tv`
+
+If paths are wrong, matching quality drops and you may see “needs review” or ownership conflicts.
+
+## 6) Optional integration URL policy
+
+If you set integration allowlist environment variables:
+- `CULLARR_ALLOWED_INTEGRATION_HOSTS`
+- `CULLARR_ALLOWED_INTEGRATION_NETWORK_RANGES`
+
+Cullarr will reject integration base URLs outside policy.
+
+You do **not** set anything extra inside integration records. The policy is global from environment variables.
+
+After changing those env vars, restart app services.
+
+Local app run:
+
+```bash
+# stop current local run first (Ctrl+C)
+cd /path/to/cullarr
+bin/dev
+```
+
+Docker Compose:
+
+```bash
+cd /path/to/cullarr
+docker compose --profile <sqlite|postgres> --env-file <env-file> up -d --build
+```
+
+## 7) Run health checks
 
 For each integration row, click **Check**.
 
-Expected outcomes:
-- `healthy`: connection + auth + compatibility checks pass
-- `warning`: integration can be read, but delete compatibility is restricted
-- `unsupported`: version contract does not meet requirements
+Typical statuses:
+- `healthy`: endpoint reachable, auth valid, compatibility supports delete path
+- `warning`: read/sync allowed, destructive support disabled (usually compatibility mode)
+- `unsupported`: integration version/contract not supported for destructive flow
 
-If you get auth or connectivity errors, use [troubleshooting/common-issues.md](../troubleshooting/common-issues.md).
-
-## Step 7: Trigger a manual sync
+## 8) Trigger first sync
 
 1. Open `http://localhost:3000/runs`
 2. Click **Sync Now**
-3. Watch live progress in the sync panel
+3. Watch progress change from queued -> running -> success/failure
 
-Expected behavior:
-- Status starts at `queued` then `running`
-- Progress phases advance
-- Final status becomes `success` or shows an explicit error code
+If a sync is already active, additional trigger may return `sync_queued_next`.
 
-## Step 8: Verify sync output
+## 9) Verify expected results
 
-After first successful sync:
+After successful sync:
+- Candidates page loads
+- Plex users appear in candidate filters (when Tautulli users were synced)
+- integration check metadata is populated
 
-- `Candidates` page loads with either candidate rows or explicit empty-state guidance
-- Plex users appear as selectable filters if Tautulli user sync completed
-- Integration rows show recent check metadata
+## Troubleshooting shortcuts
 
-## Optional API path
-
-If you are automating setup, use:
-
-- `POST /api/v1/security/re-auth`
-- `POST /api/v1/integrations`
-- `POST /api/v1/integrations/:id/check`
-- `POST /api/v1/sync-runs`
-- `GET /api/v1/sync-runs/:id`
-
-See full payload examples in [reference/api.md](../reference/api.md).
+- auth errors: [troubleshooting/common-issues.md](../troubleshooting/common-issues.md)
+- path mapping confusion: [guides/review-candidates-safely.md](review-candidates-safely.md)
+- version mismatch: [reference/error-codes.md](../reference/error-codes.md)

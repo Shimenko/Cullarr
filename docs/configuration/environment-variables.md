@@ -1,210 +1,295 @@
 # Environment Variables
 
-This page explains every environment variable currently used by Cullarr runtime code.
+This page explains every environment variable used by Cullarr runtime code.
 
-Use this page when you are editing `.env`, `.env.compose.sqlite`, or `.env.compose.postgres`.
+## Preferred workflow: `.env` files first
 
-## How configuration is resolved
+Use environment files as the primary configuration method.
 
-Cullarr settings come from three layers:
+- local app run: `.env`
+- Docker Compose sqlite profile: `.env.compose.sqlite`
+- Docker Compose postgres profile: `.env.compose.postgres`
 
-1. Environment variables
-2. Database-backed application settings (`app_settings`)
-3. Code defaults
+Prefer editing files over temporary `export` commands so your configuration is reproducible.
 
-Environment variables override database settings when both exist for the same capability.
+## Important rule: restart required
 
-## Database URL behavior (strict rules)
+When you change environment variables, restart app processes.
+
+Local app run:
+
+```bash
+cd /path/to/cullarr
+# stop the current process (Ctrl+C) if running
+bin/dev
+```
+
+Docker Compose:
+
+```bash
+cd /path/to/cullarr
+docker compose --profile <sqlite|postgres> --env-file <env-file> up -d --build
+```
+
+Environment changes are not hot-reloaded.
+
+## Configuration order
+
+Cullarr resolves settings in this order:
+
+1. environment variables
+2. DB-backed settings (`app_settings` table)
+3. code defaults
+
+## Database URL rules (strict)
 
 Cullarr has four database roles per environment:
-- primary
-- cache
-- queue
-- cable
+- `primary`
+- `cache`
+- `queue`
+- `cable`
 
 Rules enforced at boot:
 
-1. If any variable in an environment group is present, all four variables in that group must be non-blank.
-2. Every configured URL must be unique across all groups and roles.
-3. Leaving an environment group entirely unset uses SQLite fallback files for that environment.
+1. If any URL in an environment group is set, all 4 in that group must be set and non-blank.
+2. All configured URLs must be unique across all environments and roles.
+3. If an entire group is unset, that environment falls back to SQLite files.
 
-### Why blank values fail
+### Why `KEY=` fails
 
-`DATABASE_URL=` still counts as "present" because the key exists, but its value is blank.
-That triggers the "incomplete URL group" boot error.
+`DATABASE_URL=` still means “key exists,” but value is blank.
+That triggers the incomplete-group boot error.
 
-## Database URL format and examples
-
-General Postgres URL format:
+## Database URL format
 
 ```text
 postgresql://USER:PASSWORD@HOST:PORT/DB_NAME
 ```
 
-### Local Postgres example
+### Example: local Postgres host
 
 ```text
-postgresql://postgres:postgres@127.0.0.1:5432/cullarr_development
+postgresql://cullarr_app:replace_me@127.0.0.1:5432/cullarr_development
 ```
 
-### Docker Compose internal-network example
+### Example: Docker internal host
 
 ```text
-postgresql://postgres:postgres@postgres:5432/cullarr_production
+postgresql://cullarr_app:replace_me@postgres:5432/cullarr_production
 ```
 
 ### Password with special characters
 
-If your password has reserved URL characters (`@`, `:`, `/`, `?`, `#`), URL-encode them.
-
-Example password: `p@ss:word#1`
-
-Encoded URL:
+URL-encode reserved chars (`@`, `:`, `/`, `?`, `#`).
 
 ```text
-postgresql://app_user:p%40ss%3Aword%231@db.example.com:5432/cullarr_production
+postgresql://cullarr_app:p%40ss%3Aword%231@db.example.com:5432/cullarr_production
 ```
 
-## Runtime and process variables
+## Core app variables
 
-| Variable | Required | Example | What it controls | Why you might change it |
-| --- | --- | --- | --- | --- |
-| `RAILS_ENV` | yes in deployed environments | `production` | Rails environment mode | Required for deployment profile behavior |
-| `SECRET_KEY_BASE` | required in production | long random string | Session/cookie signing and framework secrets | Required for secure production boot |
-| `PORT` | optional | `3000` | Web server port | Change if `3000` is occupied |
-| `RAILS_MAX_THREADS` | optional | `5` | Active Record connection pool sizing baseline | Increase for more concurrency |
-| `JOB_CONCURRENCY` | optional | `1` | Solid Queue process count (`config/queue.yml`) | Increase worker throughput |
-| `RAILS_LOG_LEVEL` | optional | `info` | Production log verbosity | Use `debug` for diagnostics, `warn` for quieter logs |
-| `DISABLE_SYNC_STARTUP_RECOVERY` | optional | `1` | Disables stale sync recovery at boot | Emergency control for startup debugging |
-| `SOLID_QUEUE_IN_PUMA` | optional | `1` | Enables Solid Queue plugin in Puma | Advanced deployment tuning |
-| `PIDFILE` | optional | `/tmp/puma.pid` | Explicit Puma PID file path | Process manager integration |
-| `CI` | optional in test jobs | `1` | Enables eager loading in test env | Better CI parity with production boot |
+| Variable            | Required                     | Typical value      | Restart needed | What it does                                 |
+|---------------------|------------------------------|--------------------|----------------|----------------------------------------------|
+| `RAILS_ENV`         | yes for production-like runs | `production`       | yes            | Rails runtime mode                           |
+| `SECRET_KEY_BASE`   | yes in production            | long random string | yes            | signs sessions/cookies and framework secrets |
+| `PORT`              | optional                     | `3000`             | yes            | web server port                              |
+| `RAILS_MAX_THREADS` | optional                     | `5`                | yes            | thread count + DB pool baseline              |
+| `JOB_CONCURRENCY`   | optional                     | `1`                | yes            | worker process concurrency                   |
+| `RAILS_LOG_LEVEL`   | optional                     | `info`             | yes            | runtime log level                            |
 
-## Development database group
+## Advanced variables (usually leave unset)
 
-Set all or none:
+| Variable                        | Typical value   | Restart needed | When to use it                                     | Should most users set this? |
+|---------------------------------|-----------------|----------------|----------------------------------------------------|-----------------------------|
+| `DISABLE_SYNC_STARTUP_RECOVERY` | `1`             | yes            | temporary startup-debugging only                   | no                          |
+| `SOLID_QUEUE_IN_PUMA`           | `1`             | yes            | run queue plugin in Puma for single-process setups | usually no                  |
+| `PIDFILE`                       | `/tmp/puma.pid` | yes            | fixed PID path for process managers                | no                          |
+| `CI`                            | `1`             | yes            | CI/test environment toggle                         | CI pipelines only           |
 
+## DB URL groups
+
+Development group:
 - `DATABASE_URL`
 - `CACHE_DATABASE_URL`
 - `QUEUE_DATABASE_URL`
 - `CABLE_DATABASE_URL`
 
-Example:
-
-```bash
-export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/cullarr_development
-export CACHE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/cullarr_cache_development
-export QUEUE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/cullarr_queue_development
-export CABLE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/cullarr_cable_development
-```
-
-## Test database group
-
-Set all or none:
-
+Test group:
 - `TEST_DATABASE_URL`
 - `TEST_CACHE_DATABASE_URL`
 - `TEST_QUEUE_DATABASE_URL`
 - `TEST_CABLE_DATABASE_URL`
 
-Example:
-
-```bash
-export TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/cullarr_test
-export TEST_CACHE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/cullarr_cache_test
-export TEST_QUEUE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/cullarr_queue_test
-export TEST_CABLE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/cullarr_cable_test
-```
-
-## Production database group
-
-Set all or none:
-
+Production group:
 - `PRODUCTION_DATABASE_URL`
 - `PRODUCTION_CACHE_DATABASE_URL`
 - `PRODUCTION_QUEUE_DATABASE_URL`
 - `PRODUCTION_CABLE_DATABASE_URL`
 
-Example:
-
-```bash
-export PRODUCTION_DATABASE_URL=postgresql://postgres:postgres@postgres:5432/cullarr_production
-export PRODUCTION_CACHE_DATABASE_URL=postgresql://postgres:postgres@postgres:5432/cullarr_cache_production
-export PRODUCTION_QUEUE_DATABASE_URL=postgresql://postgres:postgres@postgres:5432/cullarr_queue_production
-export PRODUCTION_CABLE_DATABASE_URL=postgresql://postgres:postgres@postgres:5432/cullarr_cable_production
-```
-
 ## Deletion gate variables
 
-| Variable | Default | What it controls | Why it exists |
-| --- | --- | --- | --- |
-| `CULLARR_DELETE_MODE_ENABLED` | `false` | Global switch for delete mode | Prevents accidental destructive execution |
-| `CULLARR_DELETE_MODE_SECRET` | unset | Secret used to validate delete unlock tokens | Adds explicit secret gate to destructive flow |
+| Variable                      | Default | Restart needed | What it does                                      |
+|-------------------------------|---------|----------------|---------------------------------------------------|
+| `CULLARR_DELETE_MODE_ENABLED` | `false` | yes            | global deletion execution switch                  |
+| `CULLARR_DELETE_MODE_SECRET`  | unset   | yes            | secret used to sign/validate delete unlock tokens |
 
-> [!IMPORTANT]
-> Keep delete mode disabled unless you intentionally need deletion execution and have validated your guardrails.
+### Why `CULLARR_DELETE_MODE_SECRET` exists
 
-## Integration safety policy variables
+Deletion unlock tokens are signed against this secret.
+Without it, delete unlock is rejected even if delete mode is enabled.
 
-| Variable | Default | What it controls | Example |
-| --- | --- | --- | --- |
-| `CULLARR_ALLOWED_INTEGRATION_HOSTS` | unset (permissive) | Hostname pattern allowlist for integration base URLs | `sonarr.local,radarr.local,tautulli.local` |
-| `CULLARR_ALLOWED_INTEGRATION_NETWORK_RANGES` | unset (permissive) | CIDR allowlist for direct or resolved integration host IPs | `192.168.1.0/24,10.0.0.0/24` |
-| `CULLARR_IMAGE_PROXY_ALLOWED_HOSTS` | unset (default list) | Host allowlist override for the image proxy | `image.tmdb.org,assets.example.com` |
+### `.env` file example (preferred)
 
-Pattern behavior for `CULLARR_ALLOWED_INTEGRATION_HOSTS`:
-- Supports wildcard matching with `*`
-- Case-insensitive
-- Examples: `*.local`, `sonarr-*`, `radarr.internal.example.com`
+```dotenv
+CULLARR_DELETE_MODE_ENABLED=true
+CULLARR_DELETE_MODE_SECRET=<generate-with-openssl-rand-hex-32>
+```
+
+Generate a secret value:
+
+```bash
+cd /path/to/cullarr
+openssl rand -hex 32
+```
+
+> [!WARNING]
+> Keep delete mode disabled unless you intentionally need destructive execution.
+
+## Integration URL safety policy
+
+These variables control which integration base URLs are allowed.
+
+| Variable                                     | Default            | Restart needed | What it does               |
+|----------------------------------------------|--------------------|----------------|----------------------------|
+| `CULLARR_ALLOWED_INTEGRATION_HOSTS`          | unset (permissive) | yes            | hostname pattern allowlist |
+| `CULLARR_ALLOWED_INTEGRATION_NETWORK_RANGES` | unset (permissive) | yes            | IP network-range allowlist |
+
+### What is an IP network range?
+
+`CULLARR_ALLOWED_INTEGRATION_NETWORK_RANGES` uses IP range notation (sometimes called CIDR).
+
+Examples:
+- `192.168.1.0/24` means `192.168.1.0` through `192.168.1.255`
+- `10.0.0.0/16` means `10.0.0.0` through `10.0.255.255`
+
+### How these are applied
+
+- If both variables are unset: integration URL validation is permissive.
+- If either is set: URL host must match allowed host patterns or resolve to an allowed IP range.
+
+### What to put in integration settings when these are enabled
+
+Nothing extra in integration records.
+You still enter normal base URL + API key in Settings.
+These policies are global and read from environment variables.
+
+### `.env` file example: home lab
+
+```dotenv
+CULLARR_ALLOWED_INTEGRATION_HOSTS=sonarr.local,radarr.local,tautulli.local
+CULLARR_ALLOWED_INTEGRATION_NETWORK_RANGES=192.168.1.0/24
+```
+
+### `.env` file example: wildcard hosts
+
+```dotenv
+CULLARR_ALLOWED_INTEGRATION_HOSTS=*.media.internal,sonarr-*,radarr-*
+```
+
+## Image-related variable
+
+| Variable                            | Default | Restart needed | What it does                                             |
+|-------------------------------------|---------|----------------|----------------------------------------------------------|
+| `CULLARR_IMAGE_PROXY_ALLOWED_HOSTS` | unset   | yes            | optional host allowlist override for image proxy fetches |
+
+This controls allowed upstream image hosts for UI image fetch behavior.
+If you are not customizing image host policy, leave it unset.
 
 ## Active Record encryption variables
 
-| Variable | Required in production | What it controls |
-| --- | --- | --- |
-| `ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEYS` | yes | Key ring used for non-deterministic encryption (integration API key ciphertext) |
-| `ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY` | yes | Deterministic encryption key |
-| `ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT` | yes | Salt used by key derivation |
+| Variable                                       | Required in production | Restart needed | Purpose                       |
+|------------------------------------------------|------------------------|----------------|-------------------------------|
+| `ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEYS`        | yes                    | yes            | key ring for encrypted fields |
+| `ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY`   | yes                    | yes            | deterministic encryption key  |
+| `ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT` | yes                    | yes            | key derivation salt           |
 
-Generate starter values:
+Generate starter values.
+
+Local app run:
 
 ```bash
+cd /path/to/cullarr
 bin/rails db:encryption:init
 ```
 
-Key ring format (`PRIMARY_KEYS`):
-- comma-separated
+Docker Compose:
+
+```bash
+cd /path/to/cullarr
+docker compose --profile <sqlite|postgres> --env-file <env-file> run --rm web bin/rails db:encryption:init
+```
+
+### `ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEYS` format
+
+- comma-separated list
 - oldest key first
 - active key last
 
 Example:
 
-```text
-ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEYS=old_key_material,new_active_key_material
+```dotenv
+ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEYS=key_2025_01,key_2026_02
 ```
 
-## Docker Compose bootstrap variables (Postgres profile)
+For full rotation workflow and re-encryption task usage, follow:
+- [Rotate Active Record encryption keys](../guides/rotate-encryption-keys.md)
 
-These are used by the `postgres` container service itself:
+## Docker Postgres bootstrap variables
 
-| Variable | Default in example file | Purpose |
-| --- | --- | --- |
-| `POSTGRES_USER` | `postgres` | Database superuser used during bootstrap |
-| `POSTGRES_PASSWORD` | `postgres` | Superuser password |
-| `POSTGRES_DB` | `postgres` | Initial maintenance database name |
+Used by postgres container service itself:
 
-These values are separate from Cullarr's four production role URLs.
+| Variable            | Example              | Restart needed |
+|---------------------|----------------------|----------------|
+| `POSTGRES_USER`     | `cullarr_admin`      | yes            |
+| `POSTGRES_PASSWORD` | long random password | yes            |
+| `POSTGRES_DB`       | `postgres`           | yes            |
 
-## Where to define variables
+## Better Postgres credentials (recommended)
 
-- Local development: `.env`
-- Compose SQLite profile: `.env.compose.sqlite`
-- Compose Postgres profile: `.env.compose.postgres`
-- CI jobs: pipeline secret environment
+Avoid defaults like `postgres/postgres` outside quick local testing.
+
+Generate values:
+
+```bash
+cd /path/to/cullarr
+openssl rand -base64 32 | tr -d '\n'
+```
+
+Then place them in your env file:
+
+```dotenv
+POSTGRES_USER=cullarr_admin
+POSTGRES_PASSWORD=<paste-generated-value>
+```
+
+Use a separate least-privilege app user for `PRODUCTION_*_DATABASE_URL` where possible.
+
+## Temporary shell override (optional fallback)
+
+If you need a one-off shell override for local experiments, `export` is still valid.
+Use this only as a temporary method.
+
+## Where these values live
+
+- local app run: `.env`
+- compose sqlite: `.env.compose.sqlite`
+- compose postgres: `.env.compose.postgres`
+- CI/CD: secret environment variables
 
 ## Quick validation checklist
 
-- [ ] No DB URL key is set to an empty string.
-- [ ] If any URL in a group is set, all 4 are set.
-- [ ] All configured DB URLs are unique.
-- [ ] Production has `SECRET_KEY_BASE` and all three encryption keys.
-- [ ] Integration allowlists are either intentionally unset or intentionally scoped.
+- [ ] no DB URL key is set to empty string
+- [ ] URL groups are complete when enabled
+- [ ] configured DB URLs are unique
+- [ ] production has `SECRET_KEY_BASE` + all encryption keys
+- [ ] any changed env variable was followed by app restart

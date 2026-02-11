@@ -1,119 +1,118 @@
 # Local Setup
 
-This guide gets Cullarr running on your machine with a safe default setup.
+This guide gets Cullarr running locally with safe defaults.
 
-> [!TIP]
-> Start with SQLite first. You can switch to Postgres later after confirming the app boots, you can sign in, and the first sync works.
+If you want Docker Compose instead of local app run, use:
+- [Run with Docker Compose](../guides/deploy-with-docker-compose.md)
 
-## What You Are Setting Up
+## Before You Run Commands
 
-After this guide, you will have:
-- a running web app at `http://localhost:3000`
-- a background worker process
-- a local operator account
-- prepared databases (`primary`, `cache`, `queue`, `cable`)
+Open a terminal and go to the repository root first:
+
+```bash
+cd /path/to/cullarr
+```
+
+All commands in this guide assume you are in that directory.
+
+## What You Will Have At The End
+
+- running web app at `http://localhost:3000`
+- background worker running
+- first operator account created
+- local database prepared
 
 ## Prerequisites
 
-- Ruby and Bundler installed
-- Repository cloned
-- Shell access in repository root
+- Ruby + Bundler installed
+- repository cloned
 
-Optional but useful:
-- Docker (if you want to test compose-based deployment later)
-
-## Step 1: Install dependencies
+## 1) Install dependencies
 
 ```bash
 bundle install
 ```
 
-Expected result:
-- Bundler finishes without errors.
-- Gem dependencies are installed.
-
-## Step 2: Create your local environment file
+## 2) Create local environment file
 
 ```bash
 cp .env.example .env
 ```
 
-Keep database URL variables commented out in `.env` for your first run.
-That keeps development in SQLite mode.
+For first run, keep DB URL variables commented out. That keeps you in SQLite mode.
 
-## Step 3: Prepare the database
+## 3) Prepare database
 
 ```bash
 bin/rails db:prepare
 ```
 
 Expected result:
-- No boot errors.
-- SQLite files are created in `storage/`.
+- no errors
+- SQLite files created in `storage/`
 
-## Step 4: Start the app
+## 4) Start app
 
 ```bash
 bin/dev
 ```
 
-`bin/dev` starts three processes:
-- web server (`bin/rails server`)
-- CSS watcher (`bin/rails tailwindcss:watch`)
+This starts:
+- web server
+- Tailwind watcher
 - worker (`bin/jobs start`)
 
-If you prefer quieter logs:
+If you want quieter logs:
 
 ```bash
 bin/dev-quiet
 ```
 
-## Step 5: Create the first operator account
+## 5) Create first operator account
 
-Open `http://localhost:3000/session/new`.
+Open:
+- `http://localhost:3000/session/new`
 
-On first boot, this page is a one-time registration screen:
-- email
-- password
-- password confirmation
+On a new install, this is a one-time account creation screen.
+After that, it becomes sign-in only.
 
-After this account is created, the same URL becomes sign-in only.
+## 6) Confirm app is healthy
 
-## Step 6: Verify local health
+1. `http://localhost:3000/up` returns `200`
+2. sign in works
+3. `http://localhost:3000/runs` loads
+4. `http://localhost:3000/candidates` loads
 
-Run these checks in order:
+## Optional: switch local to Postgres
 
-1. Open `http://localhost:3000/up`.
-Expected: HTTP `200`.
+Edit `.env` and set all four development URLs together:
 
-2. Sign in through `http://localhost:3000/session/new`.
-Expected: redirect to dashboard.
+```dotenv
+DATABASE_URL=postgresql://cullarr_app:replace_me@127.0.0.1:5432/cullarr_development
+CACHE_DATABASE_URL=postgresql://cullarr_app:replace_me@127.0.0.1:5432/cullarr_cache_development
+QUEUE_DATABASE_URL=postgresql://cullarr_app:replace_me@127.0.0.1:5432/cullarr_queue_development
+CABLE_DATABASE_URL=postgresql://cullarr_app:replace_me@127.0.0.1:5432/cullarr_cable_development
+```
 
-3. Open `http://localhost:3000/runs`.
-Expected: Runs page loads and shows sync status panels.
-
-4. Open `http://localhost:3000/candidates`.
-Expected: Candidates page loads. It may show empty-state guidance before your first sync.
-
-## Optional: Switch local development to Postgres
-
-Cullarr supports strict Postgres role separation in each environment (`primary`, `cache`, `queue`, `cable`).
-
-Set all four development URLs together:
+Then restart and prepare:
 
 ```bash
-export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/cullarr_development
-export CACHE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/cullarr_cache_development
-export QUEUE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/cullarr_queue_development
-export CABLE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/cullarr_cable_development
+# stop current local run first if active (Ctrl+C)
 bin/rails db:prepare
+bin/dev
 ```
 
 > [!IMPORTANT]
-> If any one URL in a group is set, all four are required. Configured URLs must also be unique.
+> If one URL in the group is set, all 4 must be set and non-blank.
 
-## Next steps
+Docker Compose variant (if you prefer containerized runtime):
 
-1. [Connect integrations and run your first sync](../guides/connect-integrations-and-run-sync.md)
-2. [Review candidates safely](../guides/review-candidates-safely.md)
-3. [Read environment variable reference](../configuration/environment-variables.md)
+```bash
+cp .env.compose.postgres.example .env.compose.postgres
+# edit PRODUCTION_*_DATABASE_URL and secrets in .env.compose.postgres
+docker compose --profile postgres --env-file .env.compose.postgres up --build -d
+```
+
+## Next step
+
+- [Connect integrations and run your first sync](../guides/connect-integrations-and-run-sync.md)

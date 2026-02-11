@@ -1,77 +1,92 @@
-# Architecture
+# How Cullarr Is Built
 
-Cullarr is a Rails monolith with a web process and a worker process.
+This is a practical view of the app structure so you can reason about behavior and troubleshooting quickly.
 
-## Runtime shape
+## One app, two process roles
 
-- **Web process**
-  - server-rendered UI
-  - JSON API endpoints under `/api/v1/*`
-  - session/auth handling
+Cullarr is a Rails monolith that usually runs two process types:
 
-- **Worker process**
-  - sync jobs
-  - deletion workflow jobs
-  - async execution via Solid Queue
+- `web`: serves HTML pages and `/api/v1/*` JSON endpoints
+- `worker`: runs background jobs (sync and deletion workflow stages)
 
-## Why this shape
+Both processes use the same application code and database.
 
-Cullarr needs fast candidate filtering and explicit safety decisions across multiple external systems.
+## Why Cullarr keeps a local index
 
-Doing all candidate evaluation directly against Sonarr/Radarr/Tautulli APIs would be slower and harder to reason about, so Cullarr keeps a local normalized index.
+Cullarr does not compute every candidate directly from live Sonarr/Radarr/Tautulli calls on each request.
 
-## Data flow summary
+Instead, it syncs integration data into local tables and queries that index.
 
-1. Pull inventory and watch context from integrations.
-2. Normalize into local tables.
-3. Compute candidate rows from local data.
-4. Apply guardrails and expose explainable reasons.
-5. Only execute destructive workflows through explicit gated flows.
+This gives:
+- faster candidate pages
+- consistent filtering across scopes
+- clearer blocker reasons
+- better resilience when integrations are temporarily slow or rate-limited
 
-## Process boundaries
+## Where key behavior lives
 
-### Controllers
+## HTTP and session behavior
 
-Controllers handle transport concerns:
-- params
-- auth
-- response shape
-- status codes
+- controllers in `app/controllers/`
+- API controllers in `app/controllers/api/v1/`
+- login/session handling in `app/controllers/application_controller.rb`
 
-### Services
+## Candidate evaluation
 
-Services handle orchestration:
-- integration health checks
-- sync phase execution
-- candidate query and guardrail logic
-- deletion planning and execution
+- main query logic in `app/services/candidates/query.rb`
+- watched and blocker decisions are built there
 
-### Models
+## Integration communication
 
-Models enforce persistence-level invariants:
-- validations
-- typed defaults
-- derived serialization helpers
+- adapters in `app/services/integrations/`
+- retry/backoff behavior in `app/services/integrations/base_adapter.rb`
 
-## Storage model
+## Deletion workflow gates and execution
+
+- planning in `app/services/deletion/plan_deletion_run.rb`
+- execution stages in `app/services/deletion/process_action.rb`
+- delete-mode unlock issuance in `app/services/deletion/issue_delete_mode_unlock.rb`
+
+## Data model and persistence
+
+- models in `app/models/`
+- settings schema + defaults in `app/models/app_setting.rb`
+
+## Route split: UI vs API
+
+- HTML UI routes are unversioned (for example `/runs`, `/candidates`, `/settings`)
+- JSON API routes are versioned under `/api/v1/*`
+
+Even `/api/v1/health` requires authentication because all `/api/v1/*` inherits login requirements.
+
+## Configuration shape
 
 Each environment has four DB roles:
-- `primary`
-- `cache`
-- `queue`
-- `cable`
+- primary
+- cache
+- queue
+- cable
 
-SQLite is supported for simple setups.
-Postgres is supported with strict URL group + uniqueness enforcement.
+Cullarr supports:
+- SQLite for simpler local setups
+- Postgres with strict URL group and uniqueness checks
 
-## API and UI separation
+## Safety defaults by design
 
-- UI routes are unversioned and HTML-focused.
-- API routes are versioned in `/api/v1/*` and return JSON.
-- API responses include `X-Cullarr-Api-Version: v1`.
+- delete mode is off by default
+- sensitive actions require recent re-authentication
+- guardrails are checked before planning and again at execution time
 
-## Non-goals
+## What this means for operators
 
-- automatic scheduled deletion without explicit unlock
-- multi-tenant SaaS partitioning
-- hiding guardrail uncertainty behind optimistic assumptions
+When something feels inconsistent, think in this order:
+1. Was the latest sync successful?
+2. Are path mappings and watch context up to date?
+3. Is a guardrail intentionally blocking execution?
+4. Is this an auth/re-auth/delete-mode gate issue?
+
+## Related docs
+
+- `/path/to/cullarr/docs/concepts/sync-and-query-flow.md`
+- `/path/to/cullarr/docs/concepts/candidate-policy.md`
+- `/path/to/cullarr/docs/reference/data-model.md`

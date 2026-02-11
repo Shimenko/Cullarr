@@ -1,25 +1,32 @@
 # API Reference
 
-Cullarr JSON APIs are versioned under `/api/v1/*`.
+Cullarr exposes authenticated JSON APIs under `/api/v1/*`.
 
-## Authentication and headers
+This page is for operators and integrators who want exact endpoint behavior with practical examples.
 
-### Authentication
+## Before you call the API
+
+## Authentication
 
 All `/api/v1/*` endpoints require an authenticated operator session.
 
-- Unauthenticated request response: `401` with `error.code = "unauthenticated"`
-- Use `/session/new` for browser sign-in flow
+If you are not authenticated, responses return:
+- status: `401`
+- error code: `unauthenticated`
 
-### Response headers
+Sign in through the web UI first (`/session/new`) and reuse the session cookie.
 
-API responses include:
+## Response headers
+
+Cullarr includes these headers on API responses:
 - `X-Cullarr-Api-Version: v1`
 - `X-Correlation-Id: <request-id>`
 
-### Error envelope
+Use `X-Correlation-Id` when matching API errors to logs.
 
-All API errors use this shape:
+## Error shape
+
+All API errors use this envelope:
 
 ```json
 {
@@ -36,18 +43,20 @@ All API errors use this shape:
 }
 ```
 
-## Endpoint index
+## Endpoint index (v1)
 
-### Health
+## Health
 
 - `GET /api/v1/health`
 
-### Settings
+## Settings
 
 - `GET /api/v1/settings`
 - `PATCH /api/v1/settings`
 
-### Integrations
+## Integrations
+
+An integration is one Sonarr, Radarr, or Tautulli instance record.
 
 - `GET /api/v1/integrations`
 - `POST /api/v1/integrations`
@@ -56,48 +65,51 @@ All API errors use this shape:
 - `POST /api/v1/integrations/:id/check`
 - `POST /api/v1/integrations/:id/reset_history_state`
 
-### Path mappings
+## Path mappings
 
 - `GET /api/v1/integrations/:integration_id/path_mappings`
 - `POST /api/v1/integrations/:integration_id/path_mappings`
 - `PATCH /api/v1/integrations/:integration_id/path_mappings/:id`
 - `DELETE /api/v1/integrations/:integration_id/path_mappings/:id`
 
-### Path exclusions
+## Path exclusions
 
 - `GET /api/v1/path_exclusions`
 - `POST /api/v1/path_exclusions`
 - `PATCH /api/v1/path_exclusions/:id`
 - `DELETE /api/v1/path_exclusions/:id`
 
-### Keep markers
+## Keep markers
 
 - `GET /api/v1/keep_markers`
 - `POST /api/v1/keep_markers`
 - `DELETE /api/v1/keep_markers/:id`
 
-### Sync runs
+## Sync runs
 
 - `POST /api/v1/sync-runs`
 - `GET /api/v1/sync-runs`
 - `GET /api/v1/sync-runs/:id`
 
-### Candidates
+## Candidates
 
 - `GET /api/v1/candidates`
 
-### Saved views
+## Saved views
+
+Saved views are implemented API-side and persist filter presets.
+Current status: API create/list/update is available; UI management is currently limited.
 
 - `GET /api/v1/saved-views`
 - `POST /api/v1/saved-views`
 - `PATCH /api/v1/saved-views/:id`
 
-### Security
+## Security
 
 - `POST /api/v1/security/re-auth`
 - `PATCH /api/v1/operator_password`
 
-### Delete mode and deletion runs
+## Delete mode and deletion runs
 
 - `POST /api/v1/delete-mode/unlock`
 - `POST /api/v1/deletion-runs/plan`
@@ -106,13 +118,24 @@ All API errors use this shape:
 - `POST /api/v1/deletion-runs/:id/cancel`
 
 > [!WARNING]
-> Deletion endpoints are destructive workflow endpoints. Keep delete mode disabled unless you intentionally need execution.
+> Deletion endpoints are destructive workflow endpoints. Keep delete mode disabled unless you intentionally want execution.
 
-## Common request/response examples
+## Sensitive actions that require recent re-auth
+
+These endpoints require recent re-authentication (`POST /api/v1/security/re-auth`):
+- integration create/update/delete
+- integration history-state reset
+- destructive retention updates in settings
+- delete-mode unlock flow
+
+If re-auth is stale, API returns:
+- status: `403`
+- error code: `forbidden`
+- message: `Recent re-authentication is required for this action.`
+
+## Request and response examples
 
 ## `GET /api/v1/health`
-
-Response:
 
 ```json
 {
@@ -120,9 +143,11 @@ Response:
 }
 ```
 
+Note: still requires authentication.
+
 ## `POST /api/v1/sync-runs`
 
-Request body (optional trigger):
+Request body (optional):
 
 ```json
 {
@@ -130,7 +155,7 @@ Request body (optional trigger):
 }
 ```
 
-Accepted response when queued:
+Accepted response:
 
 ```json
 {
@@ -157,18 +182,7 @@ Accepted response when queued:
 }
 ```
 
-Conflict response when already active:
-
-```json
-{
-  "error": {
-    "code": "sync_already_running",
-    "message": "A sync run is already running or queued.",
-    "correlation_id": "...",
-    "details": {}
-  }
-}
-```
+If another run is active, expect conflict-style behavior such as `sync_already_running` or queued-next behavior.
 
 ## `GET /api/v1/candidates`
 
@@ -206,8 +220,6 @@ Response shape:
 
 ## `POST /api/v1/integrations`
 
-Request:
-
 ```json
 {
   "integration": {
@@ -226,11 +238,7 @@ Request:
 }
 ```
 
-Response includes normalized integration object and tuning values.
-
 ## `PATCH /api/v1/settings`
-
-Request:
 
 ```json
 {
@@ -250,45 +258,44 @@ Successful response:
 }
 ```
 
-## `POST /api/v1/saved-views`
-
-Request:
+## `POST /api/v1/security/re-auth`
 
 ```json
 {
-  "saved_view": {
-    "name": "Movies For Family",
-    "scope": "movie",
-    "filters": {
-      "plex_user_ids": [1, 2],
-      "include_blocked": false
-    }
+  "password": "<current-operator-password>"
+}
+```
+
+Success response:
+
+```json
+{
+  "re_authenticated": true,
+  "expires_at": "2026-02-11T10:30:00Z"
+}
+```
+
+## `POST /api/v1/delete-mode/unlock`
+
+```json
+{
+  "password": "<current-operator-password>"
+}
+```
+
+Success response:
+
+```json
+{
+  "unlock": {
+    "token": "<opaque-token>",
+    "expires_at": "2026-02-11T10:30:00Z"
   }
 }
 ```
 
-Allowed `filters` keys are currently:
-- `plex_user_ids`
-- `include_blocked`
+## Related docs
 
-## Pagination behavior
-
-Cursor-style pagination is used on list endpoints that support it.
-
-Example:
-- `GET /api/v1/sync-runs?cursor=100&limit=25`
-
-Validation:
-- `cursor` must be a positive integer
-- `limit` is clamped between 1 and 100
-
-## Re-authentication requirements
-
-Sensitive endpoints require recent re-authentication.
-
-Typical flow:
-
-1. `POST /api/v1/security/re-auth` with current password
-2. perform sensitive action (for example integration mutation)
-
-If missing/expired, expect `forbidden`.
+- `/path/to/cullarr/docs/reference/error-codes.md`
+- `/path/to/cullarr/docs/concepts/candidate-policy.md`
+- `/path/to/cullarr/docs/guides/connect-integrations-and-run-sync.md`

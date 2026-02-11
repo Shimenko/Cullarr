@@ -1,24 +1,24 @@
 # Rotate Active Record Encryption Keys
 
-Cullarr encrypts integration API keys at rest.
+Cullarr stores integration API keys encrypted at rest. This guide shows how to rotate keys without breaking existing data.
 
-This guide rotates encryption keys safely while preserving rollback options.
+## What is encrypted
 
-## Required variables
+Cullarr encrypts `Integration#api_key_ciphertext` with Active Record Encryption.
+
+In practice, this means:
+- your Sonarr/Radarr/Tautulli API keys are not stored as plaintext
+- key rotation is an operational task you should test before production use
+
+## Required environment variables
+
+These three environment variables must be present in production:
 
 - `ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEYS`
 - `ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY`
 - `ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT`
 
-Production requires all three values.
-
-## Key ring model
-
-`ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEYS` is a comma-separated key ring.
-
-Order matters:
-- oldest key first
-- newest active key last
+`ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEYS` is a comma-separated key ring. The last key in the list is used for new writes.
 
 Example:
 
@@ -26,56 +26,168 @@ Example:
 ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEYS=key_v1,key_v2,key_v3
 ```
 
-In this example, `key_v3` is the active key used for new writes.
+In this example, `key_v3` is the active write key.
 
-## Rotation procedure
+> [!IMPORTANT]
+> Any `.env` or environment-variable change requires an application restart. If you rotate keys but do not restart, some processes may still use old values.
 
-### 1) Add a new active primary key
+## Generate new key material
 
-Append a new key to the end of `ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEYS`.
-Do not remove old keys yet.
+### Recommended command
 
-### 2) Deploy and restart app services
+Use Rails to generate compatible key material.
 
-Restart with the updated environment so all processes load the new key ring.
-
-### 3) Re-encrypt stored integration API key ciphertext
+Local app run:
 
 ```bash
+cd /path/to/cullarr
+bin/rails db:encryption:init
+```
+
+Docker Compose:
+
+```bash
+cd /path/to/cullarr
+docker compose --profile <sqlite|postgres> --env-file <env-file> run --rm web bin/rails db:encryption:init
+```
+
+That command prints values you can use for:
+- `ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEYS`
+- `ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY`
+- `ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT`
+
+### Alternate command
+
+If you need one new primary key value only:
+
+```bash
+openssl rand -hex 32
+```
+
+## Safe rotation flow (primary keys)
+
+Use this for normal key rotation of encrypted integration API keys.
+
+1. Take a database backup first.
+2. Append a new key to the end of `ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEYS`.
+3. Restart all app processes (web + worker) with updated key values.
+4. Re-encrypt stored integration API key ciphertext with the active key.
+5. Verify integrations still pass health checks.
+6. After a stable observation window, remove old keys in a later change window.
+
+### Step 1: Backup first
+
+Follow:
+- `/path/to/cullarr/docs/guides/backup-and-restore.md`
+
+### Step 2: Add a new active key
+
+Before:
+
+```text
+ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEYS=key_v1,key_v2
+```
+
+After:
+
+```text
+ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEYS=key_v1,key_v2,key_v3
+```
+
+Do not remove `key_v1` and `key_v2` in this first change window.
+
+### Step 3: Restart app services
+
+Restart so all app processes load the same key ring.
+
+Local app run:
+
+```bash
+# stop currently running process first (Ctrl+C) if needed
+cd /path/to/cullarr
+bin/dev
+```
+
+Docker Compose:
+
+```bash
+cd /path/to/cullarr
+docker compose --profile <sqlite|postgres> --env-file <env-file> up -d --build
+```
+
+### Step 4: Re-encrypt stored ciphertext
+
+Run the built-in re-encryption task:
+
+Local app run:
+
+```bash
+cd /path/to/cullarr
 bin/rails cullarr:encryption:rotate_integration_api_keys
 ```
 
-This rewrites stored ciphertext using the currently active encryption key.
+Docker Compose:
 
-### 4) Validate integration behavior
+```bash
+cd /path/to/cullarr
+docker compose --profile <sqlite|postgres> --env-file <env-file> run --rm web bin/rails cullarr:encryption:rotate_integration_api_keys
+```
 
-In the Settings page, run **Check** on each integration.
+Expected output format:
 
-Expected:
-- no decryption errors
-- health checks continue to work
+```text
+Integration API key rotation complete. Rotated: <n>, skipped: <n>.
+```
 
-### 5) Remove retired keys later
+### Step 5: Verify integration behavior
 
-After validation and a safe observation window, remove old keys from the front of the ring in a later deploy.
+In the UI:
+1. Open Settings.
+2. For each integration, run **Check**.
+3. Confirm there are no auth or decryption failures.
 
-## Rollback approach
+Optional API check (authenticated session required):
+
+```bash
+curl -i http://localhost:3000/api/v1/health
+```
+
+### Step 6: Retire old keys later
+
+After you confirm stable behavior, remove oldest keys in a later change window.
+
+Example follow-up key ring:
+
+```text
+ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEYS=key_v2,key_v3
+```
+
+## Rollback plan
 
 If anything fails after rotation:
 
-1. Re-deploy with previous key ring including old keys.
-2. Re-run integration checks.
-3. Investigate before attempting a second rotation.
+1. Restore previous environment values (including old keys).
+2. Restart app processes.
+3. Re-run integration checks.
+4. If needed, restore database from backup.
 
-## Safety checklist
+## About deterministic key and salt rotation
 
-- [ ] New key added to end of key ring.
-- [ ] Old keys kept during first deploy.
-- [ ] Re-encryption task completed.
-- [ ] Integration health checks pass.
-- [ ] Old keys removed only in a later deploy window.
+Routine rotation usually means rotating `ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEYS`.
+
+Changing `ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY` or `ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT` is a deeper migration task. Treat it as planned maintenance with a tested backup/restore path first.
+
+## Completion checklist
+
+- [ ] Backup completed before rotation.
+- [ ] New primary key appended at the end of key ring.
+- [ ] App processes restarted after env change.
+- [ ] `bin/rails cullarr:encryption:rotate_integration_api_keys` completed.
+- [ ] Integration checks pass.
+- [ ] Old keys removed only in a later change window.
 
 ## Never do this
 
-- Never commit real key material to the repository.
-- Never drop all old keys in the same deploy where you first introduce a new key.
+- Never commit real key material.
+- Never replace the key ring with only a new key in one step.
+- Never rotate keys without a fresh backup.
