@@ -25,6 +25,15 @@ A sync run moves through these phases:
 
 Run state is stored in `sync_runs` (status, phase, counts, errors).
 
+`tautulli_library_mapping` phase behavior (v2 mapping contract):
+- runs strict matcher order: path -> external IDs -> TV structure -> title/year provisional
+- runs a strong-signal consistency check after tentative selection and fails closed on conflicts
+- rechecks provisional rows (and unresolved rows) via metadata lookup when eligible
+- keeps deterministic recheck outcomes:
+  - attempted (metadata call issued)
+  - skipped (no call issued)
+  - failed (call issued but unusable/failed)
+
 ## No overlapping syncs
 
 Cullarr does not run overlapping sync writes.

@@ -121,7 +121,7 @@ RSpec.describe "Api::V1::Candidates", type: :request do
       expect(row.fetch("reasons")).to include("watched_by_all_selected_users")
     end
 
-    it "keeps mapping_status outward contract legacy-shaped when internal v2 status is set" do
+    it "keeps mapping_status in the current outward contract snapshot pre-Slice G when internal v2 status is set" do
       sign_in_operator!
       integration = Integration.create!(
         kind: "radarr",

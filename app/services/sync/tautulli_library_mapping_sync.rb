@@ -1,6 +1,23 @@
 module Sync
   class TautulliLibraryMappingSync
     ROW_BUDGET_PER_RUN = 50_000
+    ATTEMPT_ORDER = %w[path external_ids tv_structure title_year].freeze
+    RECHECK_ELIGIBLE_STATUSES = %w[provisional_title_year unresolved].freeze
+
+    TV_STRUCTURE_OUTCOME_NON_TV = "not_applicable_non_tv".freeze
+    TV_STRUCTURE_OUTCOME_DEFERRED = "deferred_to_slice_e".freeze
+
+    CONFLICT_REASON_ID_CONFLICTS_WITH_PROVISIONAL = "id_conflicts_with_provisional".freeze
+    CONFLICT_REASON_MULTIPLE_PATH = "multiple_path_candidates".freeze
+    CONFLICT_REASON_MULTIPLE_EXTERNAL_IDS = "multiple_external_id_candidates".freeze
+    CONFLICT_REASON_TYPE_MISMATCH = "type_mismatch".freeze
+    CONFLICT_REASON_PLEX_RATING_KEY_CONFLICT = "plex_rating_key_conflict".freeze
+    CONFLICT_REASON_STRONG_SIGNAL_DISAGREEMENT = "strong_signal_disagreement".freeze
+
+    RECHECK_OUTCOME_NOT_ELIGIBLE = "not_eligible".freeze
+    RECHECK_OUTCOME_SUCCESS = "success".freeze
+    RECHECK_OUTCOME_SKIPPED = "skipped".freeze
+    RECHECK_OUTCOME_FAILED = "failed".freeze
 
     def initialize(sync_run:, correlation_id:, phase_progress: nil)
       @sync_run = sync_run
@@ -20,6 +37,28 @@ module Sync
         rows_mapped_by_title_year: 0,
         rows_ambiguous: 0,
         rows_unmapped: 0,
+        rows_external_source: 0,
+        recheck_eligible_rows: 0,
+        metadata_recheck_attempted: 0,
+        metadata_recheck_skipped: 0,
+        metadata_recheck_failed: 0,
+        provisional_seen: 0,
+        provisional_rechecked: 0,
+        provisional_promoted: 0,
+        provisional_conflicted: 0,
+        provisional_still_provisional: 0,
+        unresolved_rechecked: 0,
+        unresolved_recheck_skipped: 0,
+        unresolved_recheck_failed: 0,
+        unresolved_reclassified_external: 0,
+        unresolved_still_unresolved: 0,
+        status_verified_path: 0,
+        status_verified_external_ids: 0,
+        status_verified_tv_structure: 0,
+        status_provisional_title_year: 0,
+        status_external_source_not_managed: 0,
+        status_unresolved: 0,
+        status_ambiguous_conflict: 0,
         watchables_updated: 0,
         watchables_unchanged: 0,
         state_updates: 0
@@ -71,12 +110,35 @@ module Sync
         rows_mapped_by_title_year: 0,
         rows_ambiguous: 0,
         rows_unmapped: 0,
+        rows_external_source: 0,
+        recheck_eligible_rows: 0,
+        metadata_recheck_attempted: 0,
+        metadata_recheck_skipped: 0,
+        metadata_recheck_failed: 0,
+        provisional_seen: 0,
+        provisional_rechecked: 0,
+        provisional_promoted: 0,
+        provisional_conflicted: 0,
+        provisional_still_provisional: 0,
+        unresolved_rechecked: 0,
+        unresolved_recheck_skipped: 0,
+        unresolved_recheck_failed: 0,
+        unresolved_reclassified_external: 0,
+        unresolved_still_unresolved: 0,
+        status_verified_path: 0,
+        status_verified_external_ids: 0,
+        status_verified_tv_structure: 0,
+        status_provisional_title_year: 0,
+        status_external_source_not_managed: 0,
+        status_unresolved: 0,
+        status_ambiguous_conflict: 0,
         watchables_updated: 0,
         watchables_unchanged: 0,
         state_updates: 0
       }
       return counts if libraries.empty?
 
+      @recheck_metadata_cache = {}
       state = library_mapping_state_for(integration)
       library_states = state.fetch("libraries")
       budget_remaining = ROW_BUDGET_PER_RUN
@@ -112,7 +174,7 @@ module Sync
           counts[:rows_fetched] += fetched_rows
           counts[:rows_invalid] += page.fetch(:rows_skipped_invalid, 0).to_i
 
-          row_counts = process_rows(rows)
+          row_counts = process_rows(rows, integration:, adapter:)
           row_counts.each do |key, value|
             counts[key] += value
           end
@@ -149,7 +211,22 @@ module Sync
       counts
     end
 
-    def process_rows(rows)
+    # Deterministic transition matrix for first-pass/recheck outcomes:
+    #
+    # provisional_title_year + success + same unique strong match => verified_path/verified_external_ids
+    # provisional_title_year + success + different unique strong match => ambiguous_conflict(id_conflicts_with_provisional)
+    # provisional_title_year + success + multiple strong candidates => ambiguous_conflict(multiple_*_candidates)
+    # provisional_title_year + skipped/failed => provisional_title_year
+    #
+    # unresolved + success + unique strong match => verified_path/verified_external_ids
+    # unresolved + success + no strong match + (external && no_arr_evidence) => external_source_not_managed
+    # unresolved + success + no strong match + !(external && no_arr_evidence) => unresolved
+    # unresolved + skipped/failed + (external && no_arr_evidence) => external_source_not_managed
+    # unresolved + skipped/failed + !(external && no_arr_evidence) => unresolved
+    #
+    # Strong-signal consistency check always runs after strict-order tentative selection.
+    # It fails closed to ambiguous_conflict on strong-signal disagreement or type mismatch.
+    def process_rows(rows, integration:, adapter:)
       counts = {
         rows_processed: 0,
         rows_mapped_by_path: 0,
@@ -157,69 +234,135 @@ module Sync
         rows_mapped_by_title_year: 0,
         rows_ambiguous: 0,
         rows_unmapped: 0,
+        rows_external_source: 0,
+        recheck_eligible_rows: 0,
+        metadata_recheck_attempted: 0,
+        metadata_recheck_skipped: 0,
+        metadata_recheck_failed: 0,
+        provisional_seen: 0,
+        provisional_rechecked: 0,
+        provisional_promoted: 0,
+        provisional_conflicted: 0,
+        provisional_still_provisional: 0,
+        unresolved_rechecked: 0,
+        unresolved_recheck_skipped: 0,
+        unresolved_recheck_failed: 0,
+        unresolved_reclassified_external: 0,
+        unresolved_still_unresolved: 0,
+        status_verified_path: 0,
+        status_verified_external_ids: 0,
+        status_verified_tv_structure: 0,
+        status_provisional_title_year: 0,
+        status_external_source_not_managed: 0,
+        status_unresolved: 0,
+        status_ambiguous_conflict: 0,
         watchables_updated: 0,
         watchables_unchanged: 0
       }
       return counts if rows.empty?
 
-      path_lookup = build_path_lookup(rows)
-      movie_match_index = build_movie_match_index(rows)
-      episode_match_index = build_episode_match_index(rows)
-      movie_title_year_match_index = build_movie_title_year_match_index(rows)
+      canonical_mapper = Sync::CanonicalPathMapper.new(integration:)
+      root_classifier = Paths::ManagedRootClassifier.new(
+        managed_path_roots: AppSetting.db_value_for("managed_path_roots")
+      )
+      @path_lookup = build_path_lookup(rows:, canonical_mapper:)
+      @movie_match_index = build_movie_match_index(rows:)
+      @episode_match_index = build_episode_match_index(rows:)
+      @movie_title_year_match_index = build_movie_title_year_match_index(rows:)
 
       rows.each do |row|
         counts[:rows_processed] += 1
-        resolution = resolve_watchable(
+        first_context = row_context_for(
           row: row,
-          path_lookup: path_lookup,
-          movie_match_index: movie_match_index,
-          episode_match_index: episode_match_index,
-          movie_title_year_match_index: movie_title_year_match_index
+          canonical_mapper: canonical_mapper,
+          root_classifier: root_classifier
+        )
+        first_evaluation = evaluate_context(first_context)
+        outcome = recheck_outcome_for(
+          row: row,
+          first_evaluation: first_evaluation,
+          canonical_mapper: canonical_mapper,
+          root_classifier: root_classifier,
+          adapter: adapter
         )
 
-        case resolution.fetch(:status)
-        when :ambiguous
+        increment_recheck_counters!(counts:, first_status: first_evaluation.fetch(:status_code), outcome:)
+
+        final_resolution = final_resolution_for(
+          first_context: first_context,
+          first_evaluation: first_evaluation,
+          recheck_outcome: outcome
+        )
+        final_resolution = apply_plex_rating_key_conflict_rule(
+          resolution: final_resolution,
+          row: row
+        )
+
+        diagnostics = mapping_diagnostics_for(
+          row: row,
+          first_context: first_context,
+          first_evaluation: first_evaluation,
+          recheck_outcome: outcome,
+          final_resolution: final_resolution
+        )
+        increment_transition_counters!(
+          counts: counts,
+          first_status: first_evaluation.fetch(:status_code),
+          final_status: final_resolution.fetch(:status_code)
+        )
+
+        status_code = final_resolution.fetch(:status_code)
+        counts[status_counter_key_for(status_code)] += 1
+
+        case status_code
+        when "verified_path"
+          counts[:rows_mapped_by_path] += 1
+        when "verified_external_ids"
+          counts[:rows_mapped_by_external_ids] += 1
+        when "provisional_title_year"
+          counts[:rows_mapped_by_title_year] += 1
+        when "ambiguous_conflict"
           counts[:rows_ambiguous] += 1
-        when :unmapped
+        when "external_source_not_managed"
+          counts[:rows_external_source] += 1
           counts[:rows_unmapped] += 1
         else
-          result = apply_mapping!(
-            watchable: resolution.fetch(:watchable),
-            row: row,
-            confidence: resolution.fetch(:confidence)
-          )
-
-          if result == :ambiguous
-            counts[:rows_ambiguous] += 1
-            next
-          end
-
-          if resolution.fetch(:confidence) == :path
-            counts[:rows_mapped_by_path] += 1
-          elsif resolution.fetch(:confidence) == :title_year
-            counts[:rows_mapped_by_title_year] += 1
-          else
-            counts[:rows_mapped_by_external_ids] += 1
-          end
-
-          if result == :updated
-            counts[:watchables_updated] += 1
-          else
-            counts[:watchables_unchanged] += 1
-          end
+          counts[:rows_unmapped] += 1
         end
+
+        persistence = persist_resolution!(
+          resolution: final_resolution,
+          row: row,
+          diagnostics: diagnostics
+        )
+        if persistence == :updated
+          counts[:watchables_updated] += 1
+        elsif persistence == :unchanged
+          counts[:watchables_unchanged] += 1
+        end
+      end
+
+      if counts[:metadata_recheck_attempted] + counts[:metadata_recheck_skipped] != counts[:recheck_eligible_rows]
+        raise "library mapping metadata recheck invariant violated: attempted + skipped must equal eligible"
+      end
+      if counts[:metadata_recheck_failed] > counts[:metadata_recheck_attempted]
+        raise "library mapping metadata recheck invariant violated: failed must be <= attempted"
       end
 
       counts
     end
 
-    def build_path_lookup(rows)
+    def build_path_lookup(rows:, canonical_mapper:)
       paths = rows.filter_map do |row|
-        normalized_path_for(row[:file_path])
+        canonical_path_for(
+          raw_path: row[:file_path],
+          canonical_mapper: canonical_mapper
+        )
       end.uniq
       return {} if paths.empty?
 
-      media_rows = MediaFile.where(path_canonical: paths).pluck(:path_canonical, :attachable_type, :attachable_id)
+      media_rows = MediaFile.where(path_canonical: paths)
+                           .pluck(:path_canonical, :attachable_type, :attachable_id)
       movie_ids = media_rows.filter_map { |(_, type, id)| type == "Movie" ? id : nil }
       episode_ids = media_rows.filter_map { |(_, type, id)| type == "Episode" ? id : nil }
       movies_by_id = Movie.where(id: movie_ids).index_by(&:id)
@@ -240,7 +383,7 @@ module Sync
       grouped.transform_values { |watchables| watchables.uniq { |watchable| [ watchable.class.name, watchable.id ] } }
     end
 
-    def build_movie_match_index(rows)
+    def build_movie_match_index(rows:)
       movie_rows = rows.select { |row| row[:media_type] == "movie" }
       imdb_ids = movie_rows.filter_map { |row| row.dig(:external_ids, :imdb_id).to_s.presence }.uniq
       tmdb_ids = movie_rows.filter_map { |row| row.dig(:external_ids, :tmdb_id) }.uniq
@@ -257,7 +400,7 @@ module Sync
       }
     end
 
-    def build_episode_match_index(rows)
+    def build_episode_match_index(rows:)
       episode_rows = rows.select { |row| row[:media_type] == "episode" }
       imdb_ids = episode_rows.filter_map { |row| row.dig(:external_ids, :imdb_id).to_s.presence }.uniq
       tmdb_ids = episode_rows.filter_map { |row| row.dig(:external_ids, :tmdb_id) }.uniq
@@ -277,7 +420,7 @@ module Sync
       }
     end
 
-    def build_movie_title_year_match_index(rows)
+    def build_movie_title_year_match_index(rows:)
       movie_rows = rows.select { |row| row[:media_type] == "movie" }
       keys = movie_rows.filter_map do |row|
         normalized_title = normalized_title_for_match(row[:title])
@@ -302,88 +445,468 @@ module Sync
       grouped.transform_values { |movies| movies.uniq(&:id) }
     end
 
-    def resolve_watchable(row:, path_lookup:, movie_match_index:, episode_match_index:, movie_title_year_match_index:)
-      path_resolution = resolve_by_path(row:, path_lookup:)
-      return path_resolution if path_resolution.present?
+    def row_context_for(row:, canonical_mapper:, root_classifier:, metadata: nil)
+      discovery_external_ids = normalized_external_ids(row.fetch(:external_ids, {}))
+      metadata_external_ids = normalized_external_ids(metadata&.fetch(:external_ids, {}))
+      effective_external_ids = discovery_external_ids.merge(metadata_external_ids.compact)
+      file_path = metadata&.fetch(:file_path, nil).presence || row[:file_path]
+      canonical_path = canonical_path_for(raw_path: file_path, canonical_mapper: canonical_mapper)
+      ownership = root_classifier.classify(canonical_path)
 
-      external_resolution = resolve_by_external_ids(
-        row: row,
-        movie_match_index: movie_match_index,
-        episode_match_index: episode_match_index
-      )
-      return external_resolution if external_resolution.present?
-
-      title_year_resolution = resolve_movie_by_title_and_year(
-        row: row,
-        movie_title_year_match_index: movie_title_year_match_index
-      )
-      return title_year_resolution if title_year_resolution.present?
-
-      { status: :unmapped }
+      {
+        media_type: row[:media_type].to_s,
+        title: row[:title],
+        year: row[:year],
+        plex_rating_key: row[:plex_rating_key].to_s.strip.presence,
+        plex_guid: row[:plex_guid].to_s.strip.presence,
+        plex_parent_rating_key: row[:plex_parent_rating_key].to_s.strip.presence,
+        plex_grandparent_rating_key: row[:plex_grandparent_rating_key].to_s.strip.presence,
+        season_number: integer_or_nil(row[:season_number]),
+        episode_number: integer_or_nil(row[:episode_number]),
+        discovery_file_path: row[:file_path],
+        effective_file_path: file_path,
+        canonical_path: canonical_path,
+        ownership: ownership.fetch(:ownership),
+        matched_managed_root: ownership[:matched_managed_root],
+        normalized_path: ownership[:normalized_path],
+        external_ids: effective_external_ids,
+        discovery_external_ids: discovery_external_ids,
+        metadata_external_ids: metadata_external_ids,
+        provenance: {
+          discovery: row[:provenance],
+          enrichment: metadata&.fetch(:provenance, nil)
+        }
+      }
     end
 
-    def resolve_by_path(row:, path_lookup:)
-      normalized_path = normalized_path_for(row[:file_path])
-      return nil if normalized_path.blank?
+    def evaluate_context(context)
+      path_result = resolve_path_candidates(context)
+      external_ids_result = resolve_external_id_candidates(context)
+      title_year_result = resolve_title_year_candidates(context)
+      tv_structure_result = tv_structure_diagnostics_for(context)
 
-      matches = path_lookup[normalized_path] || []
-      return nil if matches.empty?
-      return { status: :ambiguous } if matches.size > 1
+      conflict_reason = strong_conflict_reason_for(
+        context: context,
+        path_result: path_result,
+        external_ids_result: external_ids_result
+      )
 
-      watchable = matches.first
-      expected_type = row[:media_type] == "movie" ? Movie : Episode
-      return { status: :mapped, watchable: watchable, confidence: :path } if watchable.is_a?(expected_type)
+      selected_step, selected_watchable = selected_step_for(
+        path_result: path_result,
+        external_ids_result: external_ids_result,
+        title_year_result: title_year_result
+      )
 
-      { status: :ambiguous }
-    end
-
-    def resolve_by_external_ids(row:, movie_match_index:, episode_match_index:)
-      matches = if row[:media_type] == "movie"
-        movie_matches_for_external_ids(external_ids: row.fetch(:external_ids, {}), match_index: movie_match_index)
-      else
-        episode_matches_for_external_ids(external_ids: row.fetch(:external_ids, {}), match_index: episode_match_index)
+      if conflict_reason.present?
+        return {
+          status_code: "ambiguous_conflict",
+          strategy: "conflict_detected",
+          selected_step: selected_step,
+          selected_watchable: selected_watchable,
+          conflict_reason: conflict_reason,
+          path: path_result,
+          external_ids: external_ids_result,
+          title_year: title_year_result,
+          tv_structure: tv_structure_result
+        }
       end
-      return nil if matches.empty?
-      return { status: :ambiguous } if matches.size > 1
 
-      { status: :mapped, watchable: matches.first, confidence: :external_ids }
+      case selected_step
+      when "path"
+        {
+          status_code: "verified_path",
+          strategy: "path_match",
+          selected_step: "path",
+          selected_watchable: selected_watchable,
+          conflict_reason: nil,
+          path: path_result,
+          external_ids: external_ids_result,
+          title_year: title_year_result,
+          tv_structure: tv_structure_result
+        }
+      when "external_ids"
+        {
+          status_code: "verified_external_ids",
+          strategy: "external_ids_match",
+          selected_step: "external_ids",
+          selected_watchable: selected_watchable,
+          conflict_reason: nil,
+          path: path_result,
+          external_ids: external_ids_result,
+          title_year: title_year_result,
+          tv_structure: tv_structure_result
+        }
+      when "title_year"
+        {
+          status_code: "provisional_title_year",
+          strategy: "title_year_fallback",
+          selected_step: "title_year",
+          selected_watchable: selected_watchable,
+          conflict_reason: nil,
+          path: path_result,
+          external_ids: external_ids_result,
+          title_year: title_year_result,
+          tv_structure: tv_structure_result
+        }
+      else
+        {
+          status_code: "unresolved",
+          strategy: "no_match",
+          selected_step: nil,
+          selected_watchable: nil,
+          conflict_reason: nil,
+          path: path_result,
+          external_ids: external_ids_result,
+          title_year: title_year_result,
+          tv_structure: tv_structure_result
+        }
+      end
     end
 
-    def movie_matches_for_external_ids(external_ids:, match_index:)
-      matches = []
-      imdb_id = external_ids[:imdb_id].to_s.presence
-      tmdb_id = external_ids[:tmdb_id]
-      matches.concat(match_index.fetch(:by_imdb_id).fetch(imdb_id, [])) if imdb_id.present?
-      matches.concat(match_index.fetch(:by_tmdb_id).fetch(tmdb_id, [])) if tmdb_id.present?
-      matches.uniq(&:id)
+    def resolve_path_candidates(context)
+      canonical_path = context.fetch(:canonical_path).to_s
+      return empty_path_result if canonical_path.blank?
+
+      matches = @path_lookup.fetch(canonical_path) do
+        fetched = watchables_for_canonical_path(canonical_path)
+        @path_lookup[canonical_path] = fetched
+      end
+      expected_type = context.fetch(:media_type) == "movie" ? Movie : Episode
+      expected_matches = matches.select { |watchable| watchable.is_a?(expected_type) }
+      unique = expected_matches.one? ? expected_matches.first : nil
+
+      {
+        canonical_path: canonical_path,
+        candidate_count: matches.size,
+        expected_candidate_count: expected_matches.size,
+        unique_watchable: unique,
+        mismatch_present: expected_matches.empty? && matches.any?
+      }
     end
 
-    def episode_matches_for_external_ids(external_ids:, match_index:)
-      matches = []
-      imdb_id = external_ids[:imdb_id].to_s.presence
-      tmdb_id = external_ids[:tmdb_id]
-      tvdb_id = external_ids[:tvdb_id]
-      matches.concat(match_index.fetch(:by_imdb_id).fetch(imdb_id, [])) if imdb_id.present?
-      matches.concat(match_index.fetch(:by_tmdb_id).fetch(tmdb_id, [])) if tmdb_id.present?
-      matches.concat(match_index.fetch(:by_tvdb_id).fetch(tvdb_id, [])) if tvdb_id.present?
-      matches.uniq(&:id)
+    def resolve_external_id_candidates(context)
+      external_ids = context.fetch(:external_ids)
+      return empty_external_result if external_ids.blank?
+
+      matches = if context.fetch(:media_type) == "movie"
+        movie_matches_for_external_ids(external_ids: external_ids)
+      else
+        episode_matches_for_external_ids(external_ids: external_ids)
+      end
+      unique = matches.one? ? matches.first : nil
+
+      {
+        candidate_count: matches.size,
+        unique_watchable: unique,
+        external_ids: external_ids
+      }
     end
 
-    def resolve_movie_by_title_and_year(row:, movie_title_year_match_index:)
-      return nil unless row[:media_type] == "movie"
+    def watchables_for_canonical_path(canonical_path)
+      media_rows = MediaFile.where(path_canonical: canonical_path)
+                           .pluck(:attachable_type, :attachable_id)
+      return [] if media_rows.empty?
 
-      normalized_title = normalized_title_for_match(row[:title])
-      return nil if normalized_title.blank?
+      movie_ids = media_rows.filter_map { |(type, id)| type == "Movie" ? id : nil }
+      episode_ids = media_rows.filter_map { |(type, id)| type == "Episode" ? id : nil }
+      movies_by_id = Movie.where(id: movie_ids).index_by(&:id)
+      episodes_by_id = Episode.where(id: episode_ids).index_by(&:id)
 
-      key = [ normalized_title, normalized_year_for_match(row[:year]) ]
-      matches = movie_title_year_match_index[key] || []
-      return nil if matches.empty?
-      return { status: :ambiguous } if matches.size > 1
-
-      { status: :mapped, watchable: matches.first, confidence: :title_year }
+      media_rows.filter_map do |(attachable_type, attachable_id)|
+        attachable_type == "Movie" ? movies_by_id[attachable_id] : episodes_by_id[attachable_id]
+      end.uniq { |watchable| [ watchable.class.name, watchable.id ] }
     end
 
-    def apply_mapping!(watchable:, row:, confidence:)
+    def resolve_title_year_candidates(context)
+      return empty_title_year_result unless context.fetch(:media_type) == "movie"
+
+      normalized_title = normalized_title_for_match(context.fetch(:title))
+      return empty_title_year_result if normalized_title.blank?
+
+      key = [ normalized_title, normalized_year_for_match(context.fetch(:year)) ]
+      matches = @movie_title_year_match_index[key] || []
+      unique = matches.one? ? matches.first : nil
+
+      {
+        candidate_count: matches.size,
+        unique_watchable: unique,
+        key: key
+      }
+    end
+
+    def tv_structure_diagnostics_for(context)
+      if context.fetch(:media_type) != "episode"
+        return {
+          outcome: TV_STRUCTURE_OUTCOME_NON_TV,
+          show_identity_source: {
+            source: nil,
+            value: nil,
+            status: TV_STRUCTURE_OUTCOME_NON_TV
+          },
+          season_episode_keys: {
+            season_number: nil,
+            episode_number: nil,
+            parent_rating_key: nil,
+            grandparent_rating_key: nil
+          },
+          fallback_path: nil
+        }
+      end
+
+      {
+        outcome: TV_STRUCTURE_OUTCOME_DEFERRED,
+        show_identity_source: {
+          source: "deferred",
+          value: nil,
+          status: TV_STRUCTURE_OUTCOME_DEFERRED
+        },
+        season_episode_keys: {
+          season_number: context[:season_number],
+          episode_number: context[:episode_number],
+          parent_rating_key: context[:plex_parent_rating_key],
+          grandparent_rating_key: context[:plex_grandparent_rating_key]
+        },
+        fallback_path: nil
+      }
+    end
+
+    def selected_step_for(path_result:, external_ids_result:, title_year_result:)
+      return [ "path", path_result.fetch(:unique_watchable) ] if path_result[:unique_watchable].present?
+      return [ "external_ids", external_ids_result.fetch(:unique_watchable) ] if external_ids_result[:unique_watchable].present?
+      return [ "title_year", title_year_result.fetch(:unique_watchable) ] if title_year_result[:unique_watchable].present?
+
+      [ nil, nil ]
+    end
+
+    def strong_conflict_reason_for(context:, path_result:, external_ids_result:)
+      return CONFLICT_REASON_MULTIPLE_PATH if path_result.fetch(:expected_candidate_count) > 1
+      return CONFLICT_REASON_MULTIPLE_PATH if path_result.fetch(:candidate_count) > 1
+      return CONFLICT_REASON_TYPE_MISMATCH if path_result.fetch(:mismatch_present)
+      return CONFLICT_REASON_MULTIPLE_EXTERNAL_IDS if external_ids_result.fetch(:candidate_count) > 1
+
+      path_watchable = path_result.fetch(:unique_watchable)
+      external_ids_watchable = external_ids_result.fetch(:unique_watchable)
+      if path_watchable.present? && external_ids_watchable.present? &&
+          !same_watchable?(path_watchable, external_ids_watchable)
+        return CONFLICT_REASON_STRONG_SIGNAL_DISAGREEMENT
+      end
+
+      selected = path_watchable || external_ids_watchable
+      if selected.present? && !watchable_type_matches_media_type?(watchable: selected, media_type: context.fetch(:media_type))
+        return CONFLICT_REASON_TYPE_MISMATCH
+      end
+
+      nil
+    end
+
+    def recheck_outcome_for(row:, first_evaluation:, canonical_mapper:, root_classifier:, adapter:)
+      initial_status = first_evaluation.fetch(:status_code)
+      return { state: RECHECK_OUTCOME_NOT_ELIGIBLE } unless RECHECK_ELIGIBLE_STATUSES.include?(initial_status)
+
+      rating_key = row[:plex_rating_key].to_s.strip.presence
+      if rating_key.blank?
+        return {
+          state: RECHECK_OUTCOME_SKIPPED,
+          reason: "recheck_skipped_missing_rating_key"
+        }
+      end
+
+      metadata_result = fetch_recheck_metadata_result(adapter:, rating_key:)
+      metadata = metadata_result.fetch(:metadata)
+      if metadata.blank?
+        return {
+          state: RECHECK_OUTCOME_SKIPPED,
+          reason: "recheck_skipped_cached_metadata_unusable",
+          metadata_call_issued: false
+        } unless metadata_result.fetch(:call_issued)
+
+        return {
+          state: RECHECK_OUTCOME_FAILED,
+          reason: "recheck_failed_metadata_lookup",
+          metadata_call_issued: true
+        }
+      end
+
+      context = row_context_for(
+        row: row,
+        canonical_mapper: canonical_mapper,
+        root_classifier: root_classifier,
+        metadata: metadata
+      )
+      evaluation = evaluate_context(context)
+      {
+        state: RECHECK_OUTCOME_SUCCESS,
+        metadata_call_issued: metadata_result.fetch(:call_issued),
+        context: context,
+        evaluation: evaluation
+      }
+    end
+
+    def fetch_recheck_metadata_result(adapter:, rating_key:)
+      cached = @recheck_metadata_cache[rating_key]
+      unless cached.nil?
+        return {
+          metadata: cached == :unusable ? nil : cached,
+          call_issued: false
+        }
+      end
+
+      metadata = adapter.fetch_metadata(rating_key: rating_key)
+      if metadata_usable?(metadata)
+        @recheck_metadata_cache[rating_key] = metadata
+        return { metadata: metadata, call_issued: true }
+      end
+
+      @recheck_metadata_cache[rating_key] = :unusable
+      { metadata: nil, call_issued: true }
+    rescue Integrations::Error, Integrations::ContractMismatchError, StandardError
+      @recheck_metadata_cache[rating_key] = :unusable
+      { metadata: nil, call_issued: true }
+    end
+
+    def metadata_usable?(metadata)
+      return false unless metadata.is_a?(Hash)
+
+      has_file_path = metadata[:file_path].to_s.strip.present?
+      has_external_ids = normalized_external_ids(metadata.fetch(:external_ids, {})).any?
+
+      has_file_path || has_external_ids
+    end
+
+    def final_resolution_for(first_context:, first_evaluation:, recheck_outcome:)
+      first_status = first_evaluation.fetch(:status_code)
+      recheck_state = recheck_outcome.fetch(:state)
+      recheck_evaluation = recheck_outcome[:evaluation]
+      recheck_context = recheck_outcome[:context]
+
+      case first_status
+      when "ambiguous_conflict", "verified_path", "verified_external_ids", "verified_tv_structure"
+        resolution_from_evaluation(first_evaluation)
+      when "provisional_title_year"
+        provisional_resolution_for(
+          first_evaluation: first_evaluation,
+          recheck_state: recheck_state,
+          recheck_evaluation: recheck_evaluation
+        )
+      when "unresolved"
+        unresolved_resolution_for(
+          first_context: first_context,
+          first_evaluation: first_evaluation,
+          recheck_state: recheck_state,
+          recheck_context: recheck_context,
+          recheck_evaluation: recheck_evaluation
+        )
+      else
+        resolution_from_evaluation(first_evaluation)
+      end
+    end
+
+    def provisional_resolution_for(first_evaluation:, recheck_state:, recheck_evaluation:)
+      provisional_watchable = first_evaluation.fetch(:selected_watchable)
+      if recheck_state == RECHECK_OUTCOME_SUCCESS && recheck_evaluation.present?
+        recheck_status = recheck_evaluation.fetch(:status_code)
+        if recheck_status == "ambiguous_conflict"
+          return resolution_from_evaluation(
+            recheck_evaluation.merge(
+              selected_watchable: provisional_watchable || recheck_evaluation[:selected_watchable]
+            )
+          )
+        end
+        if %w[verified_path verified_external_ids].include?(recheck_status)
+          recheck_watchable = recheck_evaluation.fetch(:selected_watchable)
+          if same_watchable?(provisional_watchable, recheck_watchable)
+            return resolution_from_evaluation(recheck_evaluation.merge(selected_watchable: provisional_watchable))
+          end
+
+          return {
+            status_code: "ambiguous_conflict",
+            strategy: "conflict_detected",
+            selected_step: recheck_evaluation[:selected_step],
+            selected_watchable: provisional_watchable,
+            conflict_reason: CONFLICT_REASON_ID_CONFLICTS_WITH_PROVISIONAL
+          }
+        end
+      end
+
+      {
+        status_code: "provisional_title_year",
+        strategy: "title_year_fallback",
+        selected_step: first_evaluation[:selected_step],
+        selected_watchable: provisional_watchable,
+        conflict_reason: nil
+      }
+    end
+
+    def unresolved_resolution_for(first_context:, first_evaluation:, recheck_state:, recheck_context:, recheck_evaluation:)
+      if recheck_state == RECHECK_OUTCOME_SUCCESS && recheck_evaluation.present?
+        recheck_status = recheck_evaluation.fetch(:status_code)
+        if %w[verified_path verified_external_ids ambiguous_conflict].include?(recheck_status)
+          return resolution_from_evaluation(recheck_evaluation)
+        end
+      end
+
+      context = recheck_context || first_context
+      evaluation = recheck_evaluation || first_evaluation
+
+      if context.fetch(:ownership) == "external" && no_arr_evidence?(evaluation)
+        return {
+          status_code: "external_source_not_managed",
+          strategy: "external_unmanaged_path",
+          selected_step: nil,
+          selected_watchable: evaluation[:selected_watchable],
+          conflict_reason: nil
+        }
+      end
+
+      {
+        status_code: "unresolved",
+        strategy: "no_match",
+        selected_step: nil,
+        selected_watchable: evaluation[:selected_watchable],
+        conflict_reason: nil
+      }
+    end
+
+    def no_arr_evidence?(evaluation)
+      evaluation.dig(:path, :unique_watchable).blank? &&
+        evaluation.dig(:external_ids, :unique_watchable).blank?
+    end
+
+    def resolution_from_evaluation(evaluation)
+      {
+        status_code: evaluation.fetch(:status_code),
+        strategy: evaluation.fetch(:strategy),
+        selected_step: evaluation[:selected_step],
+        selected_watchable: evaluation[:selected_watchable],
+        conflict_reason: evaluation[:conflict_reason]
+      }
+    end
+
+    def apply_plex_rating_key_conflict_rule(resolution:, row:)
+      watchable = resolution[:selected_watchable]
+      incoming_rating_key = row[:plex_rating_key].to_s.strip.presence
+      return resolution.merge(allow_overwrite_rating_key: false) if watchable.blank? || incoming_rating_key.blank?
+
+      existing_rating_key = watchable.plex_rating_key.to_s.strip.presence
+      return resolution.merge(allow_overwrite_rating_key: false) if existing_rating_key.blank?
+      return resolution.merge(allow_overwrite_rating_key: false) if existing_rating_key == incoming_rating_key
+
+      if resolution[:status_code] == "verified_path"
+        return resolution.merge(allow_overwrite_rating_key: true)
+      end
+
+      resolution.merge(
+        status_code: "ambiguous_conflict",
+        strategy: "conflict_detected",
+        conflict_reason: CONFLICT_REASON_PLEX_RATING_KEY_CONFLICT,
+        allow_overwrite_rating_key: false
+      )
+    end
+
+    def persist_resolution!(resolution:, row:, diagnostics:)
+      watchable = resolution[:selected_watchable]
+      return :unmapped if watchable.blank?
+
       attrs = {}
       metadata = watchable.metadata_json.is_a?(Hash) ? watchable.metadata_json.deep_dup : {}
       incoming_rating_key = row[:plex_rating_key].to_s.strip.presence
@@ -391,28 +914,8 @@ module Sync
 
       if incoming_rating_key.present?
         existing_rating_key = watchable.plex_rating_key.to_s.strip.presence
-        if existing_rating_key.blank?
+        if existing_rating_key.blank? || resolution[:allow_overwrite_rating_key]
           attrs[:plex_rating_key] = incoming_rating_key
-        elsif existing_rating_key != incoming_rating_key
-          if confidence == :path
-            attrs[:plex_rating_key] = incoming_rating_key
-          else
-            metadata["plex_added_at"] = row[:plex_added_at] if row[:plex_added_at].present?
-            attrs[:metadata_json] = metadata if metadata_changed?(watchable.metadata_json, metadata)
-            attrs.merge!(
-              watchable.mapping_state_attributes_for(
-                status_code: "ambiguous_conflict",
-                strategy: "conflict_detected",
-                diagnostics: mapping_diagnostics_for(
-                  row: row,
-                  confidence: confidence,
-                  conflict_reason: "plex_rating_key_conflict"
-                )
-              )
-            )
-            persist_watchable_changes!(watchable:, attrs:)
-            return :ambiguous
-          end
         end
       end
 
@@ -425,20 +928,25 @@ module Sync
       attrs[:metadata_json] = metadata if metadata_changed?(watchable.metadata_json, metadata)
       attrs.merge!(
         watchable.mapping_state_attributes_for(
-          status_code: mapping_status_for_confidence(confidence),
-          strategy: mapping_strategy_for_confidence(confidence),
-          diagnostics: mapping_diagnostics_for(row:, confidence:)
+          status_code: resolution.fetch(:status_code),
+          strategy: resolution.fetch(:strategy),
+          diagnostics: diagnostics
         )
       )
 
       persist_watchable_changes!(watchable:, attrs:)
     end
 
-    def normalized_path_for(raw_path)
-      value = raw_path.to_s
+    def canonical_path_for(raw_path:, canonical_mapper:)
+      value = raw_path.to_s.strip
       return nil if value.blank?
 
-      Paths::Normalizer.normalize(value)
+      normalized_path_for(canonical_mapper.canonicalize(value))
+    end
+
+    def normalized_path_for(raw_path)
+      normalized = Paths::Normalizer.normalize(raw_path)
+      normalized.presence
     end
 
     def library_mapping_state_for(integration)
@@ -474,37 +982,63 @@ module Sync
       :updated
     end
 
-    def mapping_status_for_confidence(confidence)
-      case confidence
-      when :path
-        "verified_path"
-      when :external_ids
-        "verified_external_ids"
-      when :title_year
-        "provisional_title_year"
-      else
-        "unresolved"
-      end
-    end
+    def mapping_diagnostics_for(row:, first_context:, first_evaluation:, recheck_outcome:, final_resolution:)
+      recheck_context = recheck_outcome[:context]
+      recheck_evaluation = recheck_outcome[:evaluation]
 
-    def mapping_strategy_for_confidence(confidence)
-      case confidence
-      when :path
-        "path_match"
-      when :external_ids
-        "external_ids_match"
-      when :title_year
-        "title_year_fallback"
-      else
-        "no_match"
-      end
-    end
-
-    def mapping_diagnostics_for(row:, confidence:, conflict_reason: nil)
-      diagnostics = {
+      {
         version: "v2",
-        attempt_order: [ "path", "external_ids", "tv_structure", "title_year" ],
-        selected_step: confidence.to_s,
+        attempt_order: ATTEMPT_ORDER,
+        selected_step: final_resolution[:selected_step],
+        conflict_reason: final_resolution[:conflict_reason],
+        provenance: {
+          discovery: first_context.dig(:provenance, :discovery),
+          enrichment: first_context.dig(:provenance, :enrichment),
+          recheck_enrichment: recheck_context&.dig(:provenance, :enrichment)
+        },
+        path: {
+          raw_path: first_context[:discovery_file_path],
+          normalized_path: first_context[:normalized_path],
+          canonical_path: first_context[:canonical_path],
+          ownership: first_context[:ownership],
+          matched_managed_root: first_context[:matched_managed_root],
+          first_pass_candidate_count: first_evaluation.dig(:path, :candidate_count).to_i,
+          first_pass_expected_candidate_count: first_evaluation.dig(:path, :expected_candidate_count).to_i,
+          recheck_normalized_path: recheck_context&.dig(:normalized_path),
+          recheck_canonical_path: recheck_context&.dig(:canonical_path),
+          recheck_candidate_count: recheck_evaluation&.dig(:path, :candidate_count),
+          recheck_expected_candidate_count: recheck_evaluation&.dig(:path, :expected_candidate_count)
+        },
+        ids: {
+          discovery: first_context[:discovery_external_ids],
+          first_pass_effective: first_context[:external_ids],
+          recheck_effective: recheck_context&.fetch(:external_ids, nil),
+          first_pass_candidate_count: first_evaluation.dig(:external_ids, :candidate_count).to_i,
+          recheck_candidate_count: recheck_evaluation&.dig(:external_ids, :candidate_count),
+          conflict_reason: final_resolution[:conflict_reason]
+        },
+        tv_structure: first_evaluation.fetch(:tv_structure),
+        promotion_conflict: {
+          first_pass_status: first_evaluation.fetch(:status_code),
+          final_status: final_resolution.fetch(:status_code),
+          recheck_outcome: recheck_outcome.fetch(:state),
+          recheck_reason: recheck_outcome[:reason],
+          conflict_reason: final_resolution[:conflict_reason]
+        },
+        first_pass: {
+          status_code: first_evaluation[:status_code],
+          strategy: first_evaluation[:strategy],
+          selected_step: first_evaluation[:selected_step],
+          conflict_reason: first_evaluation[:conflict_reason]
+        },
+        recheck: {
+          state: recheck_outcome.fetch(:state),
+          reason: recheck_outcome[:reason],
+          status_code: recheck_evaluation&.fetch(:status_code, nil),
+          strategy: recheck_evaluation&.fetch(:strategy, nil),
+          selected_step: recheck_evaluation&.fetch(:selected_step, nil),
+          conflict_reason: recheck_evaluation&.fetch(:conflict_reason, nil)
+        },
         signals: {
           media_type: row[:media_type],
           plex_rating_key: row[:plex_rating_key],
@@ -515,8 +1049,189 @@ module Sync
           external_ids: row[:external_ids]
         }.compact
       }
-      diagnostics[:conflict_reason] = conflict_reason if conflict_reason.present?
-      diagnostics
+    end
+
+    def increment_recheck_counters!(counts:, first_status:, outcome:)
+      return unless RECHECK_ELIGIBLE_STATUSES.include?(first_status)
+
+      counts[:recheck_eligible_rows] += 1
+      counts[:provisional_seen] += 1 if first_status == "provisional_title_year"
+
+      case outcome.fetch(:state)
+      when RECHECK_OUTCOME_SUCCESS
+        if outcome.fetch(:metadata_call_issued, false)
+          counts[:metadata_recheck_attempted] += 1
+        else
+          counts[:metadata_recheck_skipped] += 1
+        end
+        if first_status == "provisional_title_year"
+          counts[:provisional_rechecked] += 1
+        else
+          counts[:unresolved_rechecked] += 1
+        end
+      when RECHECK_OUTCOME_SKIPPED
+        counts[:metadata_recheck_skipped] += 1
+        if first_status == "unresolved"
+          counts[:unresolved_recheck_skipped] += 1
+        end
+      when RECHECK_OUTCOME_FAILED
+        counts[:metadata_recheck_attempted] += 1
+        counts[:metadata_recheck_failed] += 1
+        if first_status == "unresolved"
+          counts[:unresolved_recheck_failed] += 1
+        end
+      end
+    end
+
+    def increment_transition_counters!(counts:, first_status:, final_status:)
+      if first_status == "provisional_title_year"
+        case final_status
+        when "verified_path", "verified_external_ids"
+          counts[:provisional_promoted] += 1
+        when "ambiguous_conflict"
+          counts[:provisional_conflicted] += 1
+        else
+          counts[:provisional_still_provisional] += 1
+        end
+      end
+
+      if first_status == "unresolved"
+        if final_status == "external_source_not_managed"
+          counts[:unresolved_reclassified_external] += 1
+        elsif final_status == "unresolved"
+          counts[:unresolved_still_unresolved] += 1
+        end
+      end
+    end
+
+    def status_counter_key_for(status_code)
+      case status_code
+      when "verified_path"
+        :status_verified_path
+      when "verified_external_ids"
+        :status_verified_external_ids
+      when "verified_tv_structure"
+        :status_verified_tv_structure
+      when "provisional_title_year"
+        :status_provisional_title_year
+      when "external_source_not_managed"
+        :status_external_source_not_managed
+      when "ambiguous_conflict"
+        :status_ambiguous_conflict
+      else
+        :status_unresolved
+      end
+    end
+
+    def watchable_type_matches_media_type?(watchable:, media_type:)
+      return watchable.is_a?(Movie) if media_type == "movie"
+      return watchable.is_a?(Episode) if media_type == "episode"
+
+      false
+    end
+
+    def movie_matches_for_external_ids(external_ids:)
+      imdb_id = external_ids[:imdb_id].to_s.presence
+      tmdb_id = external_ids[:tmdb_id]
+      matches = []
+
+      if imdb_id.present?
+        ensure_movie_external_id_index!(index_key: :by_imdb_id, column_name: :imdb_id, value: imdb_id)
+        matches.concat(@movie_match_index.fetch(:by_imdb_id).fetch(imdb_id, []))
+      end
+      if tmdb_id.present?
+        ensure_movie_external_id_index!(index_key: :by_tmdb_id, column_name: :tmdb_id, value: tmdb_id)
+        matches.concat(@movie_match_index.fetch(:by_tmdb_id).fetch(tmdb_id, []))
+      end
+
+      matches.uniq(&:id)
+    end
+
+    def episode_matches_for_external_ids(external_ids:)
+      imdb_id = external_ids[:imdb_id].to_s.presence
+      tmdb_id = external_ids[:tmdb_id]
+      tvdb_id = external_ids[:tvdb_id]
+      matches = []
+
+      if imdb_id.present?
+        ensure_episode_external_id_index!(index_key: :by_imdb_id, column_name: :imdb_id, value: imdb_id)
+        matches.concat(@episode_match_index.fetch(:by_imdb_id).fetch(imdb_id, []))
+      end
+      if tmdb_id.present?
+        ensure_episode_external_id_index!(index_key: :by_tmdb_id, column_name: :tmdb_id, value: tmdb_id)
+        matches.concat(@episode_match_index.fetch(:by_tmdb_id).fetch(tmdb_id, []))
+      end
+      if tvdb_id.present?
+        ensure_episode_external_id_index!(index_key: :by_tvdb_id, column_name: :tvdb_id, value: tvdb_id)
+        matches.concat(@episode_match_index.fetch(:by_tvdb_id).fetch(tvdb_id, []))
+      end
+
+      matches.uniq(&:id)
+    end
+
+    def ensure_movie_external_id_index!(index_key:, column_name:, value:)
+      bucket = @movie_match_index.fetch(index_key)
+      return if bucket.key?(value)
+
+      bucket[value] = Movie.where(column_name => value).to_a
+    end
+
+    def ensure_episode_external_id_index!(index_key:, column_name:, value:)
+      bucket = @episode_match_index.fetch(index_key)
+      return if bucket.key?(value)
+
+      bucket[value] = Episode.where(column_name => value).to_a
+    end
+
+    def normalized_external_ids(external_ids)
+      hash = external_ids.is_a?(Hash) ? external_ids : {}
+      imdb_id = hash[:imdb_id].to_s.strip.presence || hash["imdb_id"].to_s.strip.presence
+      tmdb_id = integer_or_nil(hash[:tmdb_id] || hash["tmdb_id"])
+      tvdb_id = integer_or_nil(hash[:tvdb_id] || hash["tvdb_id"])
+      {
+        imdb_id: imdb_id,
+        tmdb_id: tmdb_id,
+        tvdb_id: tvdb_id
+      }.compact
+    end
+
+    def integer_or_nil(value)
+      parsed = Integer(value, exception: false)
+      return nil unless parsed&.positive?
+
+      parsed
+    end
+
+    def same_watchable?(left, right)
+      return false if left.blank? || right.blank?
+
+      left.class.name == right.class.name && left.id == right.id
+    end
+
+    def empty_path_result
+      {
+        canonical_path: nil,
+        candidate_count: 0,
+        expected_candidate_count: 0,
+        unique_watchable: nil,
+        mismatch_present: false
+      }
+    end
+
+    def empty_external_result
+      {
+        candidate_count: 0,
+        unique_watchable: nil,
+        external_ids: {}
+      }
+    end
+
+    def empty_title_year_result
+      {
+        candidate_count: 0,
+        unique_watchable: nil,
+        key: nil
+      }
     end
 
     def normalized_title_for_match(value)

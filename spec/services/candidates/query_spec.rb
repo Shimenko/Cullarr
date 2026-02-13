@@ -724,7 +724,7 @@ RSpec.describe Candidates::Query, type: :service do
       expect(row.dig(:mapping_status, :state)).to eq("mapped")
     end
 
-    it "keeps external_source_not_managed outward status in unresolved legacy branch" do
+    it "keeps external_source_not_managed in the current outward contract snapshot pre-Slice G" do
       integration = create_integration!(name: "Radarr External Source Freeze", host: "external-source-freeze")
       user = PlexUser.create!(tautulli_user_id: 115, friendly_name: "External Source User", is_hidden: false)
       movie = Movie.create!(
