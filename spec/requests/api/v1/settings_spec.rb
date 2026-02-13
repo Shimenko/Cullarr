@@ -53,6 +53,18 @@ RSpec.describe "Api::V1::Settings", type: :request do
         "watched_mode" => include("value" => "play_count", "source" => "default")
       )
     end
+
+    it "returns ownership settings in the envelope shape" do
+      sign_in_operator!
+
+      get "/api/v1/settings", as: :json
+
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body.fetch("settings")).to include(
+        "managed_path_roots" => include("value" => [], "source" => "default"),
+        "external_path_policy" => include("value" => "classify_external", "source" => "default")
+      )
+    end
   end
 
   describe "PATCH /api/v1/settings" do
@@ -96,11 +108,73 @@ RSpec.describe "Api::V1::Settings", type: :request do
       expect(AppSetting.find_by(key: "sensitive_action_reauthentication_window_minutes")&.value_json).to eq(30)
     end
 
+    it "persists managed path settings from API updates" do
+      patch_settings(
+        settings: {
+          managed_path_roots: [ "/mnt/tv", "/mnt/movies" ],
+          external_path_policy: "classify_external"
+        }
+      )
+
+      expect(response.parsed_body).to eq("ok" => true)
+      expect(AppSetting.find_by(key: "managed_path_roots")&.value_json).to eq([ "/mnt/movies", "/mnt/tv" ])
+      expect(AppSetting.db_value_for("external_path_policy")).to eq("classify_external")
+    end
+
+    it "clears managed_path_roots when updated to an empty array" do
+      AppSetting.create!(key: "managed_path_roots", value_json: [ "/mnt/media" ])
+
+      patch_settings(
+        settings: {
+          managed_path_roots: []
+        }
+      )
+
+      expect(response).to have_http_status(:ok)
+      expect(AppSetting.find_by(key: "managed_path_roots")&.value_json).to eq([])
+    end
+
     it "rejects immutable settings updates" do
       patch_settings(settings: { delete_mode_enabled: true })
 
       expect(response).to have_http_status(:unprocessable_content)
       expect(parsed_error_code).to eq("settings_immutable")
+    end
+
+    it "rejects nil managed_path_roots values" do
+      patch_settings(
+        settings: {
+          managed_path_roots: nil
+        }
+      )
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(parsed_error_code).to eq("validation_failed")
+      expect(response.parsed_body.dig("error", "details", "fields", "managed_path_roots")).to be_present
+    end
+
+    it "rejects non-absolute managed_path_roots values" do
+      patch_settings(
+        settings: {
+          managed_path_roots: [ "relative/root" ]
+        }
+      )
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(parsed_error_code).to eq("validation_failed")
+      expect(response.parsed_body.dig("error", "details", "fields", "managed_path_roots")).to be_present
+    end
+
+    it "rejects invalid external_path_policy values" do
+      patch_settings(
+        settings: {
+          external_path_policy: "unsupported_mode"
+        }
+      )
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(parsed_error_code).to eq("validation_failed")
+      expect(response.parsed_body.dig("error", "details", "fields", "external_path_policy")).to be_present
     end
 
     it "rejects invalid values and emits validation_failed" do

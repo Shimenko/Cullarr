@@ -26,7 +26,7 @@ High-level flow:
 
 | Table             | Why it exists                                                    | Important fields                                        |
 |-------------------|------------------------------------------------------------------|---------------------------------------------------------|
-| `app_settings`    | Runtime settings stored in DB (except env-managed keys).         | `key`, `value_json`                                     |
+| `app_settings`    | Runtime settings stored in DB (except env-managed keys).         | `key`, `value_json` (for example `managed_path_roots`, `external_path_policy`) |
 | `integrations`    | One record per Sonarr/Radarr/Tautulli instance.                  | `kind`, `name`, `base_url`, `status`, `settings_json`   |
 | `path_mappings`   | Translate integration paths to real disk paths known by Cullarr. | `integration_id`, `from_prefix`, `to_prefix`, `enabled` |
 | `path_exclusions` | Paths that should never be deleted through Cullarr.              | `path_prefix`, `enabled`                                |

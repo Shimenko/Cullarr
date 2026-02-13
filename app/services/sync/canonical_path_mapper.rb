@@ -1,12 +1,12 @@
 module Sync
   class CanonicalPathMapper
     def initialize(integration:)
-      @mappings = integration.path_mappings.where(enabled: true).order(Arel.sql("LENGTH(from_prefix) DESC"))
+      @mappings = integration.path_mappings.where(enabled: true).order(Arel.sql("LENGTH(from_prefix) DESC, id ASC"))
     end
 
     def canonicalize(path)
       normalized = Paths::Normalizer.normalize(path)
-      mapping = mappings.find { |candidate| prefix_match?(normalized, candidate.from_prefix) }
+      mapping = Paths::PrefixMatcher.best_match(path: normalized, candidates: mappings) { |candidate| candidate.from_prefix }
       return normalized if mapping.blank?
 
       suffix = normalized.delete_prefix(mapping.from_prefix)
@@ -14,15 +14,9 @@ module Sync
       Paths::Normalizer.normalize(translated)
     end
 
-    private
+  private
 
     attr_reader :mappings
-
-    def prefix_match?(path, prefix)
-      return path.start_with?("/") if prefix == "/"
-
-      path == prefix || path.start_with?("#{prefix}/")
-    end
 
     def join_canonical_path(to_prefix, suffix)
       normalized_suffix = suffix.to_s

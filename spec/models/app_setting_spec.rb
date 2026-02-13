@@ -27,6 +27,19 @@ RSpec.describe AppSetting, type: :model do
       )
     end
 
+    it "returns defaults for ownership mapping settings" do
+      settings = described_class.effective_settings(env: {})
+
+      expect(settings["managed_path_roots"]).to eq(
+        value: [],
+        source: "default"
+      )
+      expect(settings["external_path_policy"]).to eq(
+        value: "classify_external",
+        source: "default"
+      )
+    end
+
     it "returns the default source for re-authentication window settings" do
       settings = described_class.effective_settings(env: {})
 
@@ -91,6 +104,68 @@ RSpec.describe AppSetting, type: :model do
 
       expect(described_class.find_by(key: "sync_enabled")&.value_json).to be(false)
       expect(described_class.find_by(key: "sync_interval_minutes")&.value_json).to eq(120)
+    end
+
+    it "normalizes managed_path_roots from array input with deterministic ordering" do
+      described_class.apply_updates!(
+        settings: {
+          managed_path_roots: [ "/mnt/b", "/mnt/a//", "/mnt/abc", "/", "/mnt/a" ]
+        }
+      )
+
+      expect(described_class.find_by(key: "managed_path_roots")&.value_json).to eq([ "/mnt/abc", "/mnt/a", "/mnt/b", "/" ])
+    end
+
+    it "normalizes managed_path_roots from newline-delimited string input" do
+      described_class.apply_updates!(
+        settings: {
+          managed_path_roots: "/mnt/tv\n\n/mnt/movies/\r\n"
+        }
+      )
+
+      expect(described_class.find_by(key: "managed_path_roots")&.value_json).to eq([ "/mnt/movies", "/mnt/tv" ])
+    end
+
+    it "clears managed_path_roots when updated with an empty array" do
+      described_class.create!(key: "managed_path_roots", value_json: [ "/mnt/media" ])
+
+      described_class.apply_updates!(
+        settings: {
+          managed_path_roots: []
+        }
+      )
+
+      expect(described_class.find_by(key: "managed_path_roots")&.value_json).to eq([])
+    end
+
+    it "rejects nil managed_path_roots values" do
+      expect do
+        described_class.apply_updates!(
+          settings: {
+            managed_path_roots: nil
+          }
+        )
+      end.to raise_error(AppSetting::InvalidSettingError)
+    end
+
+    it "rejects non-absolute managed_path_roots values" do
+      expect do
+        described_class.apply_updates!(
+          settings: {
+            managed_path_roots: [ "relative/root" ]
+          }
+        )
+      end.to raise_error(AppSetting::InvalidSettingError)
+    end
+
+    it "rejects invalid external_path_policy values" do
+      expect do
+        described_class.apply_updates!(
+          settings: {
+            external_path_policy: "unsupported_mode"
+          }
+        )
+      end.to raise_error(AppSetting::InvalidSettingError)
     end
 
     it "raises validation errors for unknown keys" do

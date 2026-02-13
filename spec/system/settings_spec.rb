@@ -32,6 +32,20 @@ RSpec.describe "Settings", type: :system do
     expect(AppSetting.find_by(key: "sync_interval_minutes")&.value_json).to eq(60)
   end
 
+  it "clears managed path roots when textarea is submitted blank" do
+    AppSetting.create!(key: "managed_path_roots", value_json: [ "/mnt/media" ])
+    sign_in_operator!
+    visit "/settings"
+
+    within("form[action='/settings']") do
+      fill_in "Managed Path Roots", with: ""
+      click_button "Save Settings"
+    end
+
+    expect(page).to have_content("Settings updated.")
+    expect(AppSetting.find_by(key: "managed_path_roots")&.value_json).to eq([])
+  end
+
   it "creates an integration and runs check from the settings screen" do
     sign_in_operator!
     visit "/settings"

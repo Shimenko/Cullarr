@@ -35,6 +35,12 @@ class AppSetting < ApplicationRecord
     "watched_mode" => { type: :enum, default: "play_count", allowed: %w[play_count percent] },
     "watched_percent_threshold" => { type: :integer, default: 90, min: 1, max: 100 },
     "in_progress_min_offset_ms" => { type: :integer, default: 1, min: 1, max: 86_400_000 },
+    "managed_path_roots" => { type: :path_array, default: [] },
+    "external_path_policy" => {
+      type: :enum,
+      default: "classify_external",
+      allowed: %w[classify_external]
+    },
     "culled_tag_name" => { type: :string, default: "cullarr:culled", max_length: 128 },
     "image_cache_enabled" => { type: :boolean, default: false },
     "compatibility_mode_default" => {
@@ -198,6 +204,8 @@ class AppSetting < ApplicationRecord
         cast_enum(value, definition, key:)
       when :string
         cast_string(value, definition, key:)
+      when :path_array
+        cast_path_array(value, key:)
       else
         raise InvalidSettingError.new(fields: { key => [ "has unsupported setting type" ] })
       end
@@ -245,6 +253,35 @@ class AppSetting < ApplicationRecord
       end
 
       string_value
+    end
+
+    def cast_path_array(value, key:)
+      entries = if value.is_a?(Array)
+        value
+      elsif value.is_a?(String)
+        value.split(/\r?\n/)
+      elsif value.nil?
+        raise InvalidSettingError.new(fields: { key => [ "must be an array or newline-delimited string" ] })
+      else
+        raise InvalidSettingError.new(fields: { key => [ "must be an array or newline-delimited string" ] })
+      end
+
+      normalized_paths = entries.filter_map do |entry|
+        normalized = Paths::Normalizer.normalize(entry)
+        next if normalized.blank?
+        next if normalized == "/"
+
+        unless normalized.start_with?("/")
+          raise InvalidSettingError.new(fields: { key => [ "must contain only absolute path prefixes" ] })
+        end
+
+        normalized
+      end
+      normalized_paths << "/" if entries.any? { |entry| Paths::Normalizer.normalize(entry) == "/" }
+
+      normalized_paths
+        .uniq
+        .sort_by { |path| [ -path.length, path ] }
     end
 
     def validate_destructive_confirmations!(changed_values, confirmations)

@@ -262,6 +262,29 @@ Response shape:
 }
 ```
 
+## `GET /api/v1/settings`
+
+Response shape is envelope-based per key:
+
+```json
+{
+  "settings": {
+    "sync_interval_minutes": {
+      "value": 30,
+      "source": "default"
+    },
+    "managed_path_roots": {
+      "value": ["/mnt/media"],
+      "source": "db"
+    },
+    "external_path_policy": {
+      "value": "classify_external",
+      "source": "default"
+    }
+  }
+}
+```
+
 ## `PATCH /api/v1/settings`
 
 ```json
@@ -269,10 +292,14 @@ Response shape:
   "settings": {
     "sync_interval_minutes": 30,
     "watched_mode": "play_count",
-    "watched_percent_threshold": 90
+    "watched_percent_threshold": 90,
+    "managed_path_roots": ["/mnt/media/tv", "/mnt/media/movies"],
+    "external_path_policy": "classify_external"
   }
 }
 ```
+
+To clear managed roots, send `"managed_path_roots": []`. `null` is invalid and returns `validation_failed`.
 
 Successful response:
 

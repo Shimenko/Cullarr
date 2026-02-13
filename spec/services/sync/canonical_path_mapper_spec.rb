@@ -32,6 +32,15 @@ RSpec.describe Sync::CanonicalPathMapper, type: :service do
     expect(mapper.canonicalize("/database/tv/show.mkv")).to eq("/database/tv/show.mkv")
   end
 
+  it "keeps deterministic tie-breaking for equal-strength prefixes" do
+    first = PathMapping.create!(integration:, from_prefix: "/data", to_prefix: "/mnt-a")
+    second = PathMapping.create!(integration:, from_prefix: "/data", to_prefix: "/mnt-b")
+
+    mapper = described_class.new(integration:)
+    expect(mapper.canonicalize("/data/tv/show.mkv")).to eq("/mnt-a/tv/show.mkv")
+    expect(first.id).to be < second.id
+  end
+
   it "maps nested absolute paths when root prefix mapping is configured" do
     PathMapping.create!(integration:, from_prefix: "/", to_prefix: "/mnt")
 

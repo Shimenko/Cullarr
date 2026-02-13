@@ -2,6 +2,8 @@
 <% setting_value = ->(key) { settings.fetch(key).fetch(:value) } %>
 <% boolean = ActiveModel::Type::Boolean.new %>
 <% bool_setting = ->(key) { boolean.cast(setting_value.call(key)) } %>
+<% managed_path_roots_value = setting_value.call("managed_path_roots") %>
+<% managed_path_roots_lines = Array(managed_path_roots_value).join("\n") %>
 
 <section class="space-y-8">
   <%= render Ui::PanelComponent.new(
@@ -54,6 +56,13 @@
         type: :number,
         min: 1,
         autocomplete: "off"
+      ) %>
+
+      <%= render Ui::SelectComponent.new(
+        name: "settings[external_path_policy]",
+        label: "External Path Policy",
+        options: [ [ "Classify as external", "classify_external" ] ],
+        selected: setting_value.call("external_path_policy")
       ) %>
 
       <%= render Ui::InputComponent.new(
@@ -119,6 +128,21 @@
         max: 52_428_800,
         autocomplete: "off"
       ) %>
+
+      <div class="md:col-span-2 ui-field">
+        <label for="settings_managed_path_roots" class="ui-field-label">Managed Path Roots</label>
+        <%= tag.textarea(
+          managed_path_roots_lines,
+          id: "settings_managed_path_roots",
+          name: "settings[managed_path_roots]",
+          rows: 5,
+          class: "ui-control",
+          "aria-describedby": "settings_managed_path_roots_help"
+        ) %>
+        <p id="settings_managed_path_roots_help" class="ui-help">
+          One absolute path prefix per line. Paths outside these roots are classified as external.
+        </p>
+      </div>
 
       <div class="md:col-span-2 grid gap-3 rounded-lg border ui-border p-4">
         <%= render Ui::SwitchComponent.new(

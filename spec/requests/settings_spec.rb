@@ -42,6 +42,16 @@ RSpec.describe "Settings", type: :request do
     )
   end
 
+  it "renders managed path roots and external path policy controls" do
+    sign_in_operator!
+
+    get "/settings"
+
+    page = Nokogiri::HTML.parse(response.body)
+    expect(page.at_css("textarea[name='settings[managed_path_roots]']")).to be_present
+    expect(page.at_css("select[name='settings[external_path_policy]']")).to be_present
+  end
+
   def create_metrics_media_file!
     integration = Integration.create!(
       kind: "radarr",

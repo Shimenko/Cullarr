@@ -33,6 +33,8 @@ Re-authenticate in Settings -> Security.
 | `watched_mode`                                     | `play_count`     | `play_count`, `percent`                | how “watched” is calculated                                                |
 | `watched_percent_threshold`                        | `90`             | `1..100`                               | percent needed when using `watched_mode=percent`                           |
 | `in_progress_min_offset_ms`                        | `1`              | `1..86400000`                          | minimum playback progress (ms) that still counts as “in progress”          |
+| `managed_path_roots`                               | `[]`             | absolute path prefixes (array/string)  | ownership roots used to classify managed vs external sources               |
+| `external_path_policy`                             | `classify_external` | `classify_external`                 | policy for paths outside managed roots                                     |
 | `culled_tag_name`                                  | `cullarr:culled` | non-empty string                       | tag name used when full-scope cull behavior applies                        |
 | `image_cache_enabled`                              | `false`          | `true`/`false`                         | enables local caching for image proxy fetches used by UI image requests    |
 | `compatibility_mode_default`                       | `strict_latest`  | `strict_latest`, `warn_only_read_only` | default compatibility mode for new integrations                            |
@@ -106,6 +108,23 @@ This means the setting influences both candidate blocker visibility and deletion
 
 If you are unsure, keep the default (`1`).
 
+## `managed_path_roots` and `external_path_policy`
+
+`managed_path_roots` defines instance-specific ownership boundaries. These roots are used for mapping ownership
+classification and diagnostics only.
+
+Normalization and validation rules:
+- accepts either an array (API) or newline-delimited string (Settings UI)
+- drops blank lines/entries
+- normalizes slashes and trailing separators
+- requires absolute prefixes (`/`-rooted paths)
+- deduplicates after normalization
+- stores in deterministic order (longer prefixes first, then lexicographic)
+- rejects `null` values (use `[]` to clear)
+
+`external_path_policy` controls classification for paths outside managed roots.
+In current behavior, only `classify_external` is supported.
+
 ## Protected paths and keep markers
 
 Protected paths are managed through path exclusions, not this settings table.
@@ -151,6 +170,8 @@ These appear in settings responses but are immutable there. Change them in envir
 - `watched_mode=play_count`
 - `watched_percent_threshold=90`
 - `in_progress_min_offset_ms=1`
+- `managed_path_roots=[]`
+- `external_path_policy=classify_external`
 - `image_cache_enabled=false`
 - `unmonitor_parent_on_partial_version_delete=false`
 - `retention_audit_events_days=0`
