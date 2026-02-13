@@ -5,7 +5,11 @@ module Sync
     RECHECK_ELIGIBLE_STATUSES = %w[provisional_title_year unresolved].freeze
 
     TV_STRUCTURE_OUTCOME_NON_TV = "not_applicable_non_tv".freeze
-    TV_STRUCTURE_OUTCOME_DEFERRED = "deferred_to_slice_e".freeze
+    TV_STRUCTURE_OUTCOME_RESOLVED = "resolved_structural_match".freeze
+    TV_STRUCTURE_OUTCOME_MISSING_KEYS = "missing_structure_keys".freeze
+    TV_STRUCTURE_OUTCOME_UNRESOLVED_SHOW = "unresolved_show_identity".freeze
+    TV_STRUCTURE_OUTCOME_UNRESOLVED_EPISODE = "unresolved_episode_position".freeze
+    TV_STRUCTURE_OUTCOME_AMBIGUOUS = "ambiguous_structure_match".freeze
 
     CONFLICT_REASON_ID_CONFLICTS_WITH_PROVISIONAL = "id_conflicts_with_provisional".freeze
     CONFLICT_REASON_MULTIPLE_PATH = "multiple_path_candidates".freeze
@@ -139,6 +143,10 @@ module Sync
       return counts if libraries.empty?
 
       @recheck_metadata_cache = {}
+      @recheck_show_metadata_cache = {}
+      @series_by_rating_key_cache = {}
+      @series_by_external_id_cache = {}
+      @episode_position_lookup_cache = {}
       state = library_mapping_state_for(integration)
       library_states = state.fetch("libraries")
       budget_remaining = ROW_BUDGET_PER_RUN
@@ -277,13 +285,14 @@ module Sync
           canonical_mapper: canonical_mapper,
           root_classifier: root_classifier
         )
-        first_evaluation = evaluate_context(first_context)
+        first_evaluation = evaluate_context(first_context, integration: integration)
         outcome = recheck_outcome_for(
           row: row,
           first_evaluation: first_evaluation,
           canonical_mapper: canonical_mapper,
           root_classifier: root_classifier,
-          adapter: adapter
+          adapter: adapter,
+          integration: integration
         )
 
         increment_recheck_counters!(counts:, first_status: first_evaluation.fetch(:status_code), outcome:)
@@ -319,6 +328,8 @@ module Sync
           counts[:rows_mapped_by_path] += 1
         when "verified_external_ids"
           counts[:rows_mapped_by_external_ids] += 1
+        when "verified_tv_structure"
+          # TV structure is a verified mapping outcome and must never be counted as unmapped.
         when "provisional_title_year"
           counts[:rows_mapped_by_title_year] += 1
         when "ambiguous_conflict"
@@ -445,9 +456,17 @@ module Sync
       grouped.transform_values { |movies| movies.uniq(&:id) }
     end
 
-    def row_context_for(row:, canonical_mapper:, root_classifier:, metadata: nil)
+    def row_context_for(
+      row:,
+      canonical_mapper:,
+      root_classifier:,
+      metadata: nil,
+      show_metadata: nil,
+      episode_metadata_fallback: false
+    )
       discovery_external_ids = normalized_external_ids(row.fetch(:external_ids, {}))
       metadata_external_ids = normalized_external_ids(metadata&.fetch(:external_ids, {}))
+      show_external_ids = normalized_external_ids(show_metadata&.fetch(:external_ids, {}))
       effective_external_ids = discovery_external_ids.merge(metadata_external_ids.compact)
       file_path = metadata&.fetch(:file_path, nil).presence || row[:file_path]
       canonical_path = canonical_path_for(raw_path: file_path, canonical_mapper: canonical_mapper)
@@ -472,28 +491,33 @@ module Sync
         external_ids: effective_external_ids,
         discovery_external_ids: discovery_external_ids,
         metadata_external_ids: metadata_external_ids,
+        show_external_ids: show_external_ids,
+        tv_episode_metadata_fallback: episode_metadata_fallback,
         provenance: {
           discovery: row[:provenance],
-          enrichment: metadata&.fetch(:provenance, nil)
+          enrichment: metadata&.fetch(:provenance, nil),
+          show_enrichment: show_metadata&.fetch(:provenance, nil)
         }
       }
     end
 
-    def evaluate_context(context)
+    def evaluate_context(context, integration:)
       path_result = resolve_path_candidates(context)
       external_ids_result = resolve_external_id_candidates(context)
       title_year_result = resolve_title_year_candidates(context)
-      tv_structure_result = tv_structure_diagnostics_for(context)
+      tv_structure_result = resolve_tv_structure_candidates(context, integration: integration)
 
       conflict_reason = strong_conflict_reason_for(
         context: context,
         path_result: path_result,
-        external_ids_result: external_ids_result
+        external_ids_result: external_ids_result,
+        tv_structure_result: tv_structure_result
       )
 
       selected_step, selected_watchable = selected_step_for(
         path_result: path_result,
         external_ids_result: external_ids_result,
+        tv_structure_result: tv_structure_result,
         title_year_result: title_year_result
       )
 
@@ -529,6 +553,18 @@ module Sync
           status_code: "verified_external_ids",
           strategy: "external_ids_match",
           selected_step: "external_ids",
+          selected_watchable: selected_watchable,
+          conflict_reason: nil,
+          path: path_result,
+          external_ids: external_ids_result,
+          title_year: title_year_result,
+          tv_structure: tv_structure_result
+        }
+      when "tv_structure"
+        {
+          status_code: "verified_tv_structure",
+          strategy: "tv_structure_match",
+          selected_step: "tv_structure",
           selected_watchable: selected_watchable,
           conflict_reason: nil,
           path: path_result,
@@ -634,64 +670,289 @@ module Sync
       }
     end
 
-    def tv_structure_diagnostics_for(context)
-      if context.fetch(:media_type) != "episode"
+    def resolve_tv_structure_candidates(context, integration:)
+      return empty_tv_structure_result unless context.fetch(:media_type) == "episode"
+
+      season_episode_keys = {
+        season_number: context[:season_number],
+        episode_number: context[:episode_number],
+        parent_rating_key: context[:plex_parent_rating_key],
+        grandparent_rating_key: context[:plex_grandparent_rating_key]
+      }
+      fallback_path = context[:tv_episode_metadata_fallback] ? "episode_metadata" : nil
+      if season_episode_keys[:season_number].blank? || season_episode_keys[:episode_number].blank?
         return {
-          outcome: TV_STRUCTURE_OUTCOME_NON_TV,
+          outcome: TV_STRUCTURE_OUTCOME_MISSING_KEYS,
           show_identity_source: {
             source: nil,
             value: nil,
-            status: TV_STRUCTURE_OUTCOME_NON_TV
+            status: TV_STRUCTURE_OUTCOME_MISSING_KEYS
           },
-          season_episode_keys: {
-            season_number: nil,
-            episode_number: nil,
-            parent_rating_key: nil,
-            grandparent_rating_key: nil
-          },
-          fallback_path: nil
+          season_episode_keys: season_episode_keys,
+          fallback_path: fallback_path,
+          candidate_count: 0,
+          unique_watchable: nil,
+          conflict_reason: nil
+        }
+      end
+
+      show_identity = resolve_show_identity_for_tv_structure(context:, integration:)
+      if show_identity.fetch(:conflict_reason).present?
+        return {
+          outcome: TV_STRUCTURE_OUTCOME_AMBIGUOUS,
+          show_identity_source: show_identity.fetch(:show_identity_source),
+          season_episode_keys: season_episode_keys,
+          fallback_path: fallback_path,
+          candidate_count: 0,
+          unique_watchable: nil,
+          conflict_reason: show_identity.fetch(:conflict_reason)
+        }
+      end
+
+      series = show_identity.fetch(:series)
+      if series.blank?
+        return {
+          outcome: TV_STRUCTURE_OUTCOME_UNRESOLVED_SHOW,
+          show_identity_source: show_identity.fetch(:show_identity_source),
+          season_episode_keys: season_episode_keys,
+          fallback_path: fallback_path,
+          candidate_count: 0,
+          unique_watchable: nil,
+          conflict_reason: nil
+        }
+      end
+
+      episode_candidates = tv_episode_candidates_for(
+        series: series,
+        season_number: season_episode_keys.fetch(:season_number),
+        episode_number: season_episode_keys.fetch(:episode_number)
+      )
+
+      if episode_candidates.size > 1
+        return {
+          outcome: TV_STRUCTURE_OUTCOME_AMBIGUOUS,
+          show_identity_source: show_identity.fetch(:show_identity_source),
+          season_episode_keys: season_episode_keys,
+          fallback_path: fallback_path,
+          candidate_count: episode_candidates.size,
+          unique_watchable: nil,
+          conflict_reason: CONFLICT_REASON_MULTIPLE_EXTERNAL_IDS
+        }
+      end
+
+      unique_episode = episode_candidates.first
+      if unique_episode.present?
+        return {
+          outcome: TV_STRUCTURE_OUTCOME_RESOLVED,
+          show_identity_source: show_identity.fetch(:show_identity_source),
+          season_episode_keys: season_episode_keys,
+          fallback_path: fallback_path,
+          candidate_count: 1,
+          unique_watchable: unique_episode,
+          conflict_reason: nil
         }
       end
 
       {
-        outcome: TV_STRUCTURE_OUTCOME_DEFERRED,
-        show_identity_source: {
-          source: "deferred",
-          value: nil,
-          status: TV_STRUCTURE_OUTCOME_DEFERRED
-        },
-        season_episode_keys: {
-          season_number: context[:season_number],
-          episode_number: context[:episode_number],
-          parent_rating_key: context[:plex_parent_rating_key],
-          grandparent_rating_key: context[:plex_grandparent_rating_key]
-        },
-        fallback_path: nil
+        outcome: TV_STRUCTURE_OUTCOME_UNRESOLVED_EPISODE,
+        show_identity_source: show_identity.fetch(:show_identity_source),
+        season_episode_keys: season_episode_keys,
+        fallback_path: fallback_path,
+        candidate_count: 0,
+        unique_watchable: nil,
+        conflict_reason: nil
       }
     end
 
-    def selected_step_for(path_result:, external_ids_result:, title_year_result:)
+    def resolve_show_identity_for_tv_structure(context:, integration:)
+      show_rating_key = context[:plex_grandparent_rating_key].to_s.strip.presence
+      show_external_ids = context.fetch(:show_external_ids, {})
+      rating_key_candidates = series_candidates_for_show_rating_key(
+        show_rating_key: show_rating_key,
+        integration_id: integration.id
+      )
+      external_id_candidates = series_candidates_for_show_external_ids(show_external_ids:)
+
+      rating_key_unique = rating_key_candidates.one? ? rating_key_candidates.first : nil
+      external_unique = external_id_candidates.one? ? external_id_candidates.first : nil
+
+      if rating_key_unique.present? && external_unique.present? &&
+          !same_watchable?(rating_key_unique, external_unique)
+        return {
+          series: nil,
+          conflict_reason: CONFLICT_REASON_STRONG_SIGNAL_DISAGREEMENT,
+          show_identity_source: {
+            source: "mixed_show_signals",
+            value: {
+              grandparent_rating_key: show_rating_key,
+              show_external_ids: show_external_ids
+            },
+            status: "strong_signal_disagreement"
+          }
+        }
+      end
+
+      if rating_key_candidates.size > 1 || external_id_candidates.size > 1
+        return {
+          series: nil,
+          conflict_reason: CONFLICT_REASON_MULTIPLE_EXTERNAL_IDS,
+          show_identity_source: {
+            source: "mixed_show_signals",
+            value: {
+              grandparent_rating_key: show_rating_key,
+              show_external_ids: show_external_ids
+            },
+            status: "multiple_candidates"
+          }
+        }
+      end
+
+      if rating_key_unique.present?
+        return {
+          series: rating_key_unique,
+          conflict_reason: nil,
+          show_identity_source: {
+            source: "plex_grandparent_rating_key",
+            value: show_rating_key,
+            status: "resolved_unique"
+          }
+        }
+      end
+
+      if external_unique.present?
+        return {
+          series: external_unique,
+          conflict_reason: nil,
+          show_identity_source: {
+            source: "show_metadata_external_ids",
+            value: show_external_ids,
+            status: "resolved_unique"
+          }
+        }
+      end
+
+      {
+        series: nil,
+        conflict_reason: nil,
+        show_identity_source: {
+          source: nil,
+          value: show_rating_key.presence || show_external_ids.presence,
+          status: "unresolved"
+        }
+      }
+    end
+
+    def series_candidates_for_show_rating_key(show_rating_key:, integration_id:)
+      normalized_key = show_rating_key.to_s.strip.presence
+      return [] if normalized_key.blank?
+
+      cache_key = [ integration_id, normalized_key ]
+      @series_by_rating_key_cache.fetch(cache_key) do
+        @series_by_rating_key_cache[cache_key] = Series.where(plex_rating_key: normalized_key).to_a
+      end
+    end
+
+    def series_candidates_for_show_external_ids(show_external_ids:)
+      normalized_ids = normalized_external_ids(show_external_ids)
+      return [] if normalized_ids.blank?
+
+      cache_key = [
+        normalized_ids[:tvdb_id],
+        normalized_ids[:imdb_id],
+        normalized_ids[:tmdb_id]
+      ]
+      @series_by_external_id_cache.fetch(cache_key) do
+        candidates = Series.none
+        candidates = candidates.or(Series.where(tvdb_id: normalized_ids[:tvdb_id])) if normalized_ids[:tvdb_id].present?
+        candidates = candidates.or(Series.where(imdb_id: normalized_ids[:imdb_id])) if normalized_ids[:imdb_id].present?
+        candidates = candidates.or(Series.where(tmdb_id: normalized_ids[:tmdb_id])) if normalized_ids[:tmdb_id].present?
+        @series_by_external_id_cache[cache_key] = candidates.to_a.uniq(&:id)
+      end
+    end
+
+    def tv_episode_candidates_for(series:, season_number:, episode_number:)
+      lookup = episode_position_lookup_for_series(series_id: series.id)
+      season = lookup.fetch(:seasons)[season_number.to_i]
+      return [] if season.blank?
+
+      lookup.fetch(:episodes)[[ season.id, episode_number.to_i ]] || []
+    end
+
+    def episode_position_lookup_for_series(series_id:)
+      @episode_position_lookup_cache.fetch(series_id) do
+        seasons = Season.where(series_id: series_id).select(:id, :season_number).to_a
+        seasons_by_number = seasons.index_by(&:season_number)
+        season_ids = seasons.map(&:id)
+        episodes_by_key = if season_ids.empty?
+          {}
+        else
+          Episode.where(season_id: season_ids)
+                 .group_by { |episode| [ episode.season_id, episode.episode_number ] }
+        end
+        @episode_position_lookup_cache[series_id] = {
+          seasons: seasons_by_number,
+          episodes: episodes_by_key
+        }
+      end
+    end
+
+    def empty_tv_structure_result
+      {
+        outcome: TV_STRUCTURE_OUTCOME_NON_TV,
+        show_identity_source: {
+          source: nil,
+          value: nil,
+          status: TV_STRUCTURE_OUTCOME_NON_TV
+        },
+        season_episode_keys: {
+          season_number: nil,
+          episode_number: nil,
+          parent_rating_key: nil,
+          grandparent_rating_key: nil
+        },
+        fallback_path: nil,
+        candidate_count: 0,
+        unique_watchable: nil,
+        conflict_reason: nil
+      }
+    end
+
+    def selected_step_for(path_result:, external_ids_result:, tv_structure_result:, title_year_result:)
       return [ "path", path_result.fetch(:unique_watchable) ] if path_result[:unique_watchable].present?
       return [ "external_ids", external_ids_result.fetch(:unique_watchable) ] if external_ids_result[:unique_watchable].present?
+      return [ "tv_structure", tv_structure_result.fetch(:unique_watchable) ] if tv_structure_result[:unique_watchable].present?
       return [ "title_year", title_year_result.fetch(:unique_watchable) ] if title_year_result[:unique_watchable].present?
 
       [ nil, nil ]
     end
 
-    def strong_conflict_reason_for(context:, path_result:, external_ids_result:)
+    def strong_conflict_reason_for(context:, path_result:, external_ids_result:, tv_structure_result:)
+      # Conflict precedence is deterministic:
+      # 1) non-unique path matches
+      # 2) path type mismatches
+      # 3) non-unique external-id matches
+      # 4) TV-structure-specific ambiguity
+      # 5) disagreement across unique strong winners
       return CONFLICT_REASON_MULTIPLE_PATH if path_result.fetch(:expected_candidate_count) > 1
       return CONFLICT_REASON_MULTIPLE_PATH if path_result.fetch(:candidate_count) > 1
       return CONFLICT_REASON_TYPE_MISMATCH if path_result.fetch(:mismatch_present)
       return CONFLICT_REASON_MULTIPLE_EXTERNAL_IDS if external_ids_result.fetch(:candidate_count) > 1
+      return tv_structure_result.fetch(:conflict_reason) if tv_structure_result.fetch(:conflict_reason).present?
 
       path_watchable = path_result.fetch(:unique_watchable)
       external_ids_watchable = external_ids_result.fetch(:unique_watchable)
-      if path_watchable.present? && external_ids_watchable.present? &&
-          !same_watchable?(path_watchable, external_ids_watchable)
+      tv_structure_watchable = tv_structure_result.fetch(:unique_watchable)
+      strong_unique_watchables = [
+        path_watchable,
+        external_ids_watchable,
+        tv_structure_watchable
+      ].compact
+
+      if strong_unique_watchables.uniq { |watchable| [ watchable.class.name, watchable.id ] }.size > 1
         return CONFLICT_REASON_STRONG_SIGNAL_DISAGREEMENT
       end
 
-      selected = path_watchable || external_ids_watchable
+      selected = strong_unique_watchables.first
       if selected.present? && !watchable_type_matches_media_type?(watchable: selected, media_type: context.fetch(:media_type))
         return CONFLICT_REASON_TYPE_MISMATCH
       end
@@ -699,9 +960,19 @@ module Sync
       nil
     end
 
-    def recheck_outcome_for(row:, first_evaluation:, canonical_mapper:, root_classifier:, adapter:)
+    def recheck_outcome_for(row:, first_evaluation:, canonical_mapper:, root_classifier:, adapter:, integration:)
       initial_status = first_evaluation.fetch(:status_code)
       return { state: RECHECK_OUTCOME_NOT_ELIGIBLE } unless RECHECK_ELIGIBLE_STATUSES.include?(initial_status)
+
+      if row[:media_type].to_s == "episode" && initial_status == "unresolved"
+        return tv_episode_recheck_outcome_for(
+          row: row,
+          canonical_mapper: canonical_mapper,
+          root_classifier: root_classifier,
+          adapter: adapter,
+          integration: integration
+        )
+      end
 
       rating_key = row[:plex_rating_key].to_s.strip.presence
       if rating_key.blank?
@@ -733,10 +1004,94 @@ module Sync
         root_classifier: root_classifier,
         metadata: metadata
       )
-      evaluation = evaluate_context(context)
+      evaluation = evaluate_context(context, integration: integration)
       {
         state: RECHECK_OUTCOME_SUCCESS,
         metadata_call_issued: metadata_result.fetch(:call_issued),
+        context: context,
+        evaluation: evaluation
+      }
+    end
+
+    def tv_episode_recheck_outcome_for(row:, canonical_mapper:, root_classifier:, adapter:, integration:)
+      # Row-level counter semantics:
+      # - attempted: at least one metadata call issued for this row
+      # - skipped: no metadata call issued for this row
+      # - failed: row ends failed after an issued call path yields unusable metadata
+      metadata_call_issued = false
+      show_context = nil
+      show_evaluation = nil
+      show_metadata = nil
+
+      show_rating_key = row[:plex_grandparent_rating_key].to_s.strip.presence
+      if show_rating_key.present?
+        show_metadata_result = fetch_recheck_show_metadata_result(
+          adapter: adapter,
+          integration_id: integration.id,
+          show_rating_key: show_rating_key
+        )
+        metadata_call_issued ||= show_metadata_result.fetch(:call_issued)
+        show_metadata = show_metadata_result.fetch(:metadata)
+
+        if show_metadata.present?
+          show_context = row_context_for(
+            row: row,
+            canonical_mapper: canonical_mapper,
+            root_classifier: root_classifier,
+            show_metadata: show_metadata
+          )
+          show_evaluation = evaluate_context(show_context, integration: integration)
+
+          if recheck_success_status?(show_evaluation.fetch(:status_code))
+            return {
+              state: RECHECK_OUTCOME_SUCCESS,
+              reason: "recheck_show_metadata_resolved",
+              metadata_call_issued: metadata_call_issued,
+              context: show_context,
+              evaluation: show_evaluation
+            }
+          end
+        end
+      end
+
+      rating_key = row[:plex_rating_key].to_s.strip.presence
+      if rating_key.blank?
+        return {
+          state: metadata_call_issued ? RECHECK_OUTCOME_FAILED : RECHECK_OUTCOME_SKIPPED,
+          reason: metadata_call_issued ? "recheck_failed_episode_metadata_missing_rating_key" : "recheck_skipped_missing_rating_key",
+          metadata_call_issued: metadata_call_issued,
+          context: show_context,
+          evaluation: show_evaluation
+        }
+      end
+
+      metadata_result = fetch_recheck_metadata_result(adapter:, rating_key:)
+      metadata_call_issued ||= metadata_result.fetch(:call_issued)
+      metadata = metadata_result.fetch(:metadata)
+
+      if metadata.blank?
+        return {
+          state: metadata_call_issued ? RECHECK_OUTCOME_FAILED : RECHECK_OUTCOME_SKIPPED,
+          reason: metadata_result.fetch(:call_issued) ? "recheck_failed_episode_metadata_lookup" : "recheck_skipped_cached_metadata_unusable",
+          metadata_call_issued: metadata_call_issued,
+          context: show_context,
+          evaluation: show_evaluation
+        }
+      end
+
+      context = row_context_for(
+        row: row,
+        canonical_mapper: canonical_mapper,
+        root_classifier: root_classifier,
+        metadata: metadata,
+        show_metadata: show_metadata,
+        episode_metadata_fallback: true
+      )
+      evaluation = evaluate_context(context, integration: integration)
+      {
+        state: RECHECK_OUTCOME_SUCCESS,
+        reason: "recheck_episode_metadata_fallback",
+        metadata_call_issued: metadata_call_issued,
         context: context,
         evaluation: evaluation
       }
@@ -764,6 +1119,32 @@ module Sync
       { metadata: nil, call_issued: true }
     end
 
+    def fetch_recheck_show_metadata_result(adapter:, integration_id:, show_rating_key:)
+      normalized_key = show_rating_key.to_s.strip.presence
+      return { metadata: nil, call_issued: false } if normalized_key.blank?
+
+      cache_key = [ integration_id, normalized_key ]
+      cached = @recheck_show_metadata_cache[cache_key]
+      unless cached.nil?
+        return {
+          metadata: cached == :unusable ? nil : cached,
+          call_issued: false
+        }
+      end
+
+      metadata = adapter.fetch_metadata(rating_key: normalized_key)
+      if metadata_usable_for_show?(metadata)
+        @recheck_show_metadata_cache[cache_key] = metadata
+        return { metadata: metadata, call_issued: true }
+      end
+
+      @recheck_show_metadata_cache[cache_key] = :unusable
+      { metadata: nil, call_issued: true }
+    rescue Integrations::Error, Integrations::ContractMismatchError, StandardError
+      @recheck_show_metadata_cache[cache_key] = :unusable
+      { metadata: nil, call_issued: true }
+    end
+
     def metadata_usable?(metadata)
       return false unless metadata.is_a?(Hash)
 
@@ -771,6 +1152,16 @@ module Sync
       has_external_ids = normalized_external_ids(metadata.fetch(:external_ids, {})).any?
 
       has_file_path || has_external_ids
+    end
+
+    def metadata_usable_for_show?(metadata)
+      return false unless metadata.is_a?(Hash)
+
+      normalized_external_ids(metadata.fetch(:external_ids, {})).any?
+    end
+
+    def recheck_success_status?(status_code)
+      %w[verified_path verified_external_ids verified_tv_structure ambiguous_conflict].include?(status_code)
     end
 
     def final_resolution_for(first_context:, first_evaluation:, recheck_outcome:)
@@ -802,6 +1193,9 @@ module Sync
     end
 
     def provisional_resolution_for(first_evaluation:, recheck_state:, recheck_evaluation:)
+      # Movie-only provisional flow is intentionally unchanged in Slice E.
+      # Conflicts against a different strong winner continue to emit
+      # id_conflicts_with_provisional for backward-compatible diagnostics.
       provisional_watchable = first_evaluation.fetch(:selected_watchable)
       if recheck_state == RECHECK_OUTCOME_SUCCESS && recheck_evaluation.present?
         recheck_status = recheck_evaluation.fetch(:status_code)
@@ -840,7 +1234,7 @@ module Sync
     def unresolved_resolution_for(first_context:, first_evaluation:, recheck_state:, recheck_context:, recheck_evaluation:)
       if recheck_state == RECHECK_OUTCOME_SUCCESS && recheck_evaluation.present?
         recheck_status = recheck_evaluation.fetch(:status_code)
-        if %w[verified_path verified_external_ids ambiguous_conflict].include?(recheck_status)
+        if %w[verified_path verified_external_ids verified_tv_structure ambiguous_conflict].include?(recheck_status)
           return resolution_from_evaluation(recheck_evaluation)
         end
       end
@@ -985,6 +1379,7 @@ module Sync
     def mapping_diagnostics_for(row:, first_context:, first_evaluation:, recheck_outcome:, final_resolution:)
       recheck_context = recheck_outcome[:context]
       recheck_evaluation = recheck_outcome[:evaluation]
+      tv_structure = recheck_evaluation&.fetch(:tv_structure, nil) || first_evaluation.fetch(:tv_structure)
 
       {
         version: "v2",
@@ -994,7 +1389,9 @@ module Sync
         provenance: {
           discovery: first_context.dig(:provenance, :discovery),
           enrichment: first_context.dig(:provenance, :enrichment),
-          recheck_enrichment: recheck_context&.dig(:provenance, :enrichment)
+          show_enrichment: first_context.dig(:provenance, :show_enrichment),
+          recheck_enrichment: recheck_context&.dig(:provenance, :enrichment),
+          recheck_show_enrichment: recheck_context&.dig(:provenance, :show_enrichment)
         },
         path: {
           raw_path: first_context[:discovery_file_path],
@@ -1017,7 +1414,7 @@ module Sync
           recheck_candidate_count: recheck_evaluation&.dig(:external_ids, :candidate_count),
           conflict_reason: final_resolution[:conflict_reason]
         },
-        tv_structure: first_evaluation.fetch(:tv_structure),
+        tv_structure: tv_structure_diagnostics_payload(tv_structure),
         promotion_conflict: {
           first_pass_status: first_evaluation.fetch(:status_code),
           final_status: final_resolution.fetch(:status_code),
@@ -1051,6 +1448,13 @@ module Sync
       }
     end
 
+    def tv_structure_diagnostics_payload(tv_structure)
+      value = tv_structure.is_a?(Hash) ? tv_structure.deep_dup : {}
+      value.delete(:unique_watchable)
+      value.delete("unique_watchable")
+      value
+    end
+
     def increment_recheck_counters!(counts:, first_status:, outcome:)
       return unless RECHECK_ELIGIBLE_STATUSES.include?(first_status)
 
@@ -1075,9 +1479,13 @@ module Sync
           counts[:unresolved_recheck_skipped] += 1
         end
       when RECHECK_OUTCOME_FAILED
-        counts[:metadata_recheck_attempted] += 1
-        counts[:metadata_recheck_failed] += 1
-        if first_status == "unresolved"
+        if outcome.fetch(:metadata_call_issued, false)
+          counts[:metadata_recheck_attempted] += 1
+          counts[:metadata_recheck_failed] += 1
+        else
+          counts[:metadata_recheck_skipped] += 1
+        end
+        if first_status == "unresolved" && outcome.fetch(:metadata_call_issued, false)
           counts[:unresolved_recheck_failed] += 1
         end
       end

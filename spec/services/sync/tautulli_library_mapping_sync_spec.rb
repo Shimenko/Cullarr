@@ -796,7 +796,7 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
     expect(movie_by_path.mapping_diagnostics_json["conflict_reason"]).to eq("strong_signal_disagreement")
     expect(episode.mapping_status_code).to eq("verified_external_ids")
     expect(episode.mapping_diagnostics_json.fetch("tv_structure")).to include(
-      "outcome" => "deferred_to_slice_e",
+      "outcome" => "unresolved_show_identity",
       "fallback_path" => nil
     )
     expect(episode.mapping_diagnostics_json.dig("tv_structure", "season_episode_keys")).to include(
@@ -806,6 +806,640 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
       "grandparent_rating_key" => "show-1"
     )
     expect(result).to include(rows_ambiguous: 1, rows_mapped_by_external_ids: 1)
+  end
+
+  it "resolves episodes through show-first structure and keeps episode fallback below baseline" do
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli TV Show-First Baseline",
+      base_url: "https://tautulli.tv-show-first-baseline.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: { "tautulli_history_page_size" => 1 }
+    )
+    sonarr = Integration.create!(
+      kind: "sonarr",
+      name: "Sonarr TV Show-First Baseline",
+      base_url: "https://sonarr.tv-show-first-baseline.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    series = Series.create!(
+      integration: sonarr,
+      sonarr_series_id: 91_000,
+      title: "Show-First Baseline",
+      tvdb_id: 9_100
+    )
+    season = Season.create!(series:, season_number: 1)
+    episode_one = Episode.create!(
+      integration: sonarr,
+      season: season,
+      sonarr_episode_id: 91_101,
+      episode_number: 1,
+      metadata_json: {}
+    )
+    episode_two = Episode.create!(
+      integration: sonarr,
+      season: season,
+      sonarr_episode_id: 91_102,
+      episode_number: 2,
+      metadata_json: {}
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 60, title: "TV", section_type: "show" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 60, start: 0, length: 50).and_return(
+      {
+        rows: [
+          {
+            media_type: "episode",
+            plex_rating_key: "plex-episode-9101",
+            plex_grandparent_rating_key: "plex-show-9100",
+            season_number: 1,
+            episode_number: 1,
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 2,
+        has_more: true,
+        next_start: 1
+      }
+    )
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 60, start: 1, length: 50).and_return(
+      {
+        rows: [
+          {
+            media_type: "episode",
+            plex_rating_key: "plex-episode-9102",
+            plex_grandparent_rating_key: "plex-show-9100",
+            season_number: 1,
+            episode_number: 2,
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 2,
+        has_more: false,
+        next_start: 2
+      }
+    )
+
+    metadata_requests = []
+    allow(adapter).to receive(:fetch_metadata) do |rating_key:|
+      metadata_requests << rating_key
+      if rating_key == "plex-show-9100"
+        {
+          file_path: nil,
+          external_ids: { tvdb_id: 9_100 },
+          provenance: { endpoint: "get_metadata" }
+        }
+      else
+        {
+          file_path: nil,
+          external_ids: {},
+          provenance: { endpoint: "get_metadata" }
+        }
+      end
+    end
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-tv-show-first-baseline").call
+
+    episode_one.reload
+    episode_two.reload
+    expect(episode_one.mapping_status_code).to eq("verified_tv_structure")
+    expect(episode_two.mapping_status_code).to eq("verified_tv_structure")
+    expect(episode_one.mapping_strategy).to eq("tv_structure_match")
+    expect(episode_two.mapping_strategy).to eq("tv_structure_match")
+
+    baseline_episode_fallback_calls = 2
+    actual_episode_fallback_calls = metadata_requests.count { |rating_key| rating_key.start_with?("plex-episode-910") }
+    expect(actual_episode_fallback_calls).to eq(0)
+    expect(actual_episode_fallback_calls).to be < baseline_episode_fallback_calls
+    expect(metadata_requests.count { |rating_key| rating_key == "plex-show-9100" }).to eq(1)
+
+    expect(result).to include(
+      recheck_eligible_rows: 2,
+      metadata_recheck_attempted: 1,
+      metadata_recheck_skipped: 1,
+      metadata_recheck_failed: 0,
+      unresolved_rechecked: 2,
+      status_verified_tv_structure: 2,
+      rows_unmapped: 0
+    )
+    expect(result[:metadata_recheck_attempted] + result[:metadata_recheck_skipped]).to eq(result[:recheck_eligible_rows])
+    expect(result[:metadata_recheck_failed]).to be <= result[:metadata_recheck_attempted]
+  end
+
+  it "marks row-level recheck failed when show metadata succeeds but episode fallback is unusable" do
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli TV Mixed Recheck Failure",
+      base_url: "https://tautulli.tv-mixed-recheck-failure.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    sonarr = Integration.create!(
+      kind: "sonarr",
+      name: "Sonarr TV Mixed Recheck Failure",
+      base_url: "https://sonarr.tv-mixed-recheck-failure.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    series = Series.create!(
+      integration: sonarr,
+      sonarr_series_id: 92_000,
+      title: "Mixed Recheck Failure",
+      tvdb_id: 9_200
+    )
+    season = Season.create!(series:, season_number: 1)
+    Episode.create!(
+      integration: sonarr,
+      season: season,
+      sonarr_episode_id: 92_101,
+      episode_number: 1,
+      metadata_json: {}
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 61, title: "TV", section_type: "show" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 61, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "episode",
+            plex_rating_key: "plex-episode-9209",
+            plex_grandparent_rating_key: "plex-show-9200",
+            season_number: 9,
+            episode_number: 9,
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+
+    metadata_requests = []
+    allow(adapter).to receive(:fetch_metadata) do |rating_key:|
+      metadata_requests << rating_key
+      case rating_key
+      when "plex-show-9200"
+        {
+          file_path: nil,
+          external_ids: { tvdb_id: 9_200 },
+          provenance: { endpoint: "get_metadata" }
+        }
+      when "plex-episode-9209"
+        {
+          file_path: nil,
+          external_ids: {},
+          provenance: { endpoint: "get_metadata" }
+        }
+      else
+        nil
+      end
+    end
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-tv-mixed-recheck-failure").call
+
+    expect(metadata_requests).to eq([ "plex-show-9200", "plex-episode-9209" ])
+    expect(result).to include(
+      recheck_eligible_rows: 1,
+      metadata_recheck_attempted: 1,
+      metadata_recheck_failed: 1,
+      metadata_recheck_skipped: 0,
+      unresolved_recheck_failed: 1
+    )
+    expect(result[:metadata_recheck_attempted] + result[:metadata_recheck_skipped]).to eq(result[:recheck_eligible_rows])
+    expect(result[:metadata_recheck_failed]).to be <= result[:metadata_recheck_attempted]
+  end
+
+  it "fails closed with strong_signal_disagreement when path and tv structure resolve different episodes" do
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Path TV Disagreement",
+      base_url: "https://tautulli.path-tv-disagreement.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    sonarr = Integration.create!(
+      kind: "sonarr",
+      name: "Sonarr Path TV Disagreement",
+      base_url: "https://sonarr.path-tv-disagreement.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    series = Series.create!(
+      integration: sonarr,
+      sonarr_series_id: 93_000,
+      title: "Path TV Disagreement",
+      plex_rating_key: "plex-show-9300"
+    )
+    season = Season.create!(series:, season_number: 1)
+    episode_by_path = Episode.create!(
+      integration: sonarr,
+      season: season,
+      sonarr_episode_id: 93_101,
+      episode_number: 1,
+      metadata_json: {}
+    )
+    Episode.create!(
+      integration: sonarr,
+      season: season,
+      sonarr_episode_id: 93_102,
+      episode_number: 2,
+      metadata_json: {}
+    )
+    MediaFile.create!(
+      attachable: episode_by_path,
+      integration: sonarr,
+      arr_file_id: 93_001,
+      path: "/mnt/tv/path-tv-disagreement-s01e01.mkv",
+      path_canonical: "/mnt/tv/path-tv-disagreement-s01e01.mkv",
+      size_bytes: 1_000,
+      quality_json: {}
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_metadata).and_return(nil)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 62, title: "TV", section_type: "show" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 62, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "episode",
+            plex_rating_key: "plex-episode-path-tv-disagreement",
+            file_path: "/mnt/tv/path-tv-disagreement-s01e01.mkv",
+            plex_grandparent_rating_key: "plex-show-9300",
+            season_number: 1,
+            episode_number: 2,
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-path-tv-disagreement").call
+
+    episode_by_path.reload
+    expect(episode_by_path.mapping_status_code).to eq("ambiguous_conflict")
+    expect(episode_by_path.mapping_diagnostics_json["conflict_reason"]).to eq("strong_signal_disagreement")
+    expect(result).to include(rows_ambiguous: 1, rows_mapped_by_path: 0, rows_mapped_by_external_ids: 0)
+  end
+
+  it "fails closed with strong_signal_disagreement when external ids and tv structure resolve different episodes" do
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli External TV Disagreement",
+      base_url: "https://tautulli.external-tv-disagreement.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    sonarr = Integration.create!(
+      kind: "sonarr",
+      name: "Sonarr External TV Disagreement",
+      base_url: "https://sonarr.external-tv-disagreement.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    series = Series.create!(
+      integration: sonarr,
+      sonarr_series_id: 94_000,
+      title: "External TV Disagreement",
+      plex_rating_key: "plex-show-9400"
+    )
+    season = Season.create!(series:, season_number: 1)
+    episode_by_external_id = Episode.create!(
+      integration: sonarr,
+      season: season,
+      sonarr_episode_id: 94_101,
+      episode_number: 1,
+      tvdb_id: 940_001,
+      metadata_json: {}
+    )
+    Episode.create!(
+      integration: sonarr,
+      season: season,
+      sonarr_episode_id: 94_102,
+      episode_number: 2,
+      metadata_json: {}
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_metadata).and_return(nil)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 63, title: "TV", section_type: "show" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 63, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "episode",
+            plex_rating_key: "plex-episode-external-tv-disagreement",
+            plex_grandparent_rating_key: "plex-show-9400",
+            season_number: 1,
+            episode_number: 2,
+            external_ids: { tvdb_id: 940_001 }
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-external-tv-disagreement").call
+
+    episode_by_external_id.reload
+    expect(episode_by_external_id.mapping_status_code).to eq("ambiguous_conflict")
+    expect(episode_by_external_id.mapping_diagnostics_json["conflict_reason"]).to eq("strong_signal_disagreement")
+    expect(result).to include(rows_ambiguous: 1, rows_mapped_by_external_ids: 0)
+  end
+
+  it "preserves multiple_external_id_candidates precedence over disagreement when tv structure is also present" do
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli External Multiples Precedence",
+      base_url: "https://tautulli.external-multiples-precedence.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    sonarr = Integration.create!(
+      kind: "sonarr",
+      name: "Sonarr External Multiples Precedence",
+      base_url: "https://sonarr.external-multiples-precedence.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    series = Series.create!(
+      integration: sonarr,
+      sonarr_series_id: 95_000,
+      title: "External Multiples Precedence",
+      plex_rating_key: "plex-show-9500"
+    )
+    season = Season.create!(series:, season_number: 1)
+    Episode.create!(
+      integration: sonarr,
+      season: season,
+      sonarr_episode_id: 95_101,
+      episode_number: 1,
+      tvdb_id: 950_001,
+      metadata_json: {}
+    )
+    Episode.create!(
+      integration: sonarr,
+      season: season,
+      sonarr_episode_id: 95_102,
+      episode_number: 3,
+      tvdb_id: 950_001,
+      metadata_json: {}
+    )
+    tv_structure_episode = Episode.create!(
+      integration: sonarr,
+      season: season,
+      sonarr_episode_id: 95_103,
+      episode_number: 2,
+      metadata_json: {}
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_metadata).and_return(nil)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 64, title: "TV", section_type: "show" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 64, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "episode",
+            plex_rating_key: "plex-episode-precedence",
+            plex_grandparent_rating_key: "plex-show-9500",
+            season_number: 1,
+            episode_number: 2,
+            external_ids: { tvdb_id: 950_001 }
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+
+    described_class.new(sync_run:, correlation_id: "corr-library-external-multiples-precedence").call
+
+    tv_structure_episode.reload
+    expect(tv_structure_episode.mapping_status_code).to eq("ambiguous_conflict")
+    expect(tv_structure_episode.mapping_diagnostics_json["conflict_reason"]).to eq("multiple_external_id_candidates")
+  end
+
+  it "does not fetch show metadata with blank show keys and never uses title/year fallback for tv rows" do
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Blank Show Key Guard",
+      base_url: "https://tautulli.blank-show-key-guard.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    sonarr = Integration.create!(
+      kind: "sonarr",
+      name: "Sonarr Blank Show Key Guard",
+      base_url: "https://sonarr.blank-show-key-guard.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    series = Series.create!(integration: sonarr, sonarr_series_id: 96_000, title: "Blank Show Key Guard")
+    season = Season.create!(series:, season_number: 1)
+    episode = Episode.create!(
+      integration: sonarr,
+      season: season,
+      sonarr_episode_id: 96_101,
+      episode_number: 1,
+      metadata_json: {}
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 65, title: "TV", section_type: "show" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 65, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "episode",
+            title: "Episode Title Should Not Trigger Movie Fallback",
+            year: 2024,
+            plex_rating_key: "plex-episode-no-title-year-fallback",
+            plex_grandparent_rating_key: "   ",
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+
+    metadata_requests = []
+    allow(adapter).to receive(:fetch_metadata) do |rating_key:|
+      metadata_requests << rating_key
+      {
+        file_path: nil,
+        external_ids: {},
+        provenance: { endpoint: "get_metadata" }
+      }
+    end
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-blank-show-key-guard").call
+
+    episode.reload
+    expect(result).to include(rows_mapped_by_title_year: 0)
+    expect(episode.mapping_status_code).not_to eq("provisional_title_year")
+    expect(metadata_requests).to eq([ "plex-episode-no-title-year-fallback" ])
+    expect(metadata_requests).not_to include("")
+  end
+
+  it "keeps show metadata cache integration-scoped across the same run" do
+    tautulli_one = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Show Cache Scope One",
+      base_url: "https://tautulli.show-cache-scope-one.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    tautulli_two = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Show Cache Scope Two",
+      base_url: "https://tautulli.show-cache-scope-two.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    sonarr = Integration.create!(
+      kind: "sonarr",
+      name: "Sonarr Show Cache Scope",
+      base_url: "https://sonarr.show-cache-scope.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    series = Series.create!(
+      integration: sonarr,
+      sonarr_series_id: 97_000,
+      title: "Show Cache Scope",
+      tvdb_id: 9_700
+    )
+    season = Season.create!(series:, season_number: 1)
+    Episode.create!(
+      integration: sonarr,
+      season: season,
+      sonarr_episode_id: 97_101,
+      episode_number: 1,
+      metadata_json: {}
+    )
+
+    health_check_one = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    health_check_two = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli_one, raise_on_unsupported: true).and_return(health_check_one)
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli_two, raise_on_unsupported: true).and_return(health_check_two)
+
+    adapter_one = instance_double(Integrations::TautulliAdapter)
+    adapter_two = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli_one).and_return(adapter_one)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli_two).and_return(adapter_two)
+
+    allow(adapter_one).to receive(:fetch_libraries).and_return([ { library_id: 66, title: "TV", section_type: "show" } ])
+    allow(adapter_two).to receive(:fetch_libraries).and_return([ { library_id: 67, title: "TV", section_type: "show" } ])
+
+    allow(adapter_one).to receive(:fetch_library_media_page).with(library_id: 66, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "episode",
+            plex_rating_key: "plex-episode-cache-1",
+            plex_grandparent_rating_key: "plex-show-cache-scope",
+            season_number: 1,
+            episode_number: 1,
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+    allow(adapter_two).to receive(:fetch_library_media_page).with(library_id: 67, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "episode",
+            plex_rating_key: "plex-episode-cache-2",
+            plex_grandparent_rating_key: "plex-show-cache-scope",
+            season_number: 1,
+            episode_number: 1,
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+
+    show_calls_one = 0
+    show_calls_two = 0
+    allow(adapter_one).to receive(:fetch_metadata) do |rating_key:|
+      show_calls_one += 1 if rating_key == "plex-show-cache-scope"
+      {
+        file_path: nil,
+        external_ids: { tvdb_id: 9_700 },
+        provenance: { endpoint: "get_metadata" }
+      }
+    end
+    allow(adapter_two).to receive(:fetch_metadata) do |rating_key:|
+      show_calls_two += 1 if rating_key == "plex-show-cache-scope"
+      {
+        file_path: nil,
+        external_ids: { tvdb_id: 9_700 },
+        provenance: { endpoint: "get_metadata" }
+      }
+    end
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-show-cache-scope").call
+
+    expect(show_calls_one).to eq(1)
+    expect(show_calls_two).to eq(1)
+    expect(result).to include(recheck_eligible_rows: 2, metadata_recheck_attempted: 2, metadata_recheck_skipped: 0)
   end
 
   it "emits type_mismatch when path resolves to a different watchable type" do
