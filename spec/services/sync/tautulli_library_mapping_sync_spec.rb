@@ -271,5 +271,67 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
     expect(movie.mapping_strategy).to eq("title_year_fallback")
     expect(movie.metadata_json["plex_added_at"]).to eq("2024-10-09T01:54:18Z")
   end
+
+  it "keeps mapping semantics unchanged when discovery rows include provenance markers" do
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Provenance Mapping",
+      base_url: "https://tautulli.provenance.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: { "tautulli_history_page_size" => 100 }
+    )
+    radarr = Integration.create!(
+      kind: "radarr",
+      name: "Radarr Provenance Mapping",
+      base_url: "https://radarr.provenance.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    movie = Movie.create!(
+      integration: radarr,
+      radarr_movie_id: 6_101,
+      title: "Provenance Fallback Movie",
+      year: 2025,
+      metadata_json: {}
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 41, title: "Movies", section_type: "movie" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 41, start: 0, length: 100).and_return(
+      {
+        rows: [
+          {
+            media_type: "movie",
+            title: "Provenance Fallback Movie",
+            year: 2025,
+            plex_rating_key: "plex-movie-6101",
+            external_ids: {},
+            provenance: {
+              endpoint: "get_library_media_info",
+              feed_role: "discovery",
+              source_strength: "sparse_discovery"
+            }
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-provenance-no-drift").call
+
+    expect(result).to include(rows_mapped_by_title_year: 1, rows_ambiguous: 0, rows_unmapped: 0)
+    movie.reload
+    expect(movie.mapping_status_code).to eq("provisional_title_year")
+    expect(movie.mapping_strategy).to eq("title_year_fallback")
+  end
 end
 # rubocop:enable RSpec/ExampleLength, RSpec/MultipleExpectations, RSpec/ReceiveMessages

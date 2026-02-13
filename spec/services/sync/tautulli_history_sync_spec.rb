@@ -437,7 +437,22 @@ RSpec.describe Sync::TautulliHistorySync, type: :service do
       {
         duration_ms: 1_000_000,
         plex_guid: "plex://movie/2001",
-        external_ids: { tmdb_id: 2_001 }
+        file_path: "/mnt/media/movies/Needs Mapping (2001)/movie.mkv",
+        external_ids: { tmdb_id: 2_001 },
+        provenance: {
+          endpoint: "get_metadata",
+          feed_role: "enrichment_verification",
+          source_strength: "strong_enrichment",
+          integration_name: tautulli_integration.name,
+          integration_kind: tautulli_integration.kind,
+          integration_id: tautulli_integration.id,
+          signals: {
+            file_path: { source: "metadata_media_info_parts_file", raw: "/mnt/media/movies/Needs Mapping (2001)/movie.mkv", normalized: "/mnt/media/movies/Needs Mapping (2001)/movie.mkv", value: "/mnt/media/movies/Needs Mapping (2001)/movie.mkv" },
+            imdb_id: { source: "none", raw: nil, normalized: nil, value: nil },
+            tmdb_id: { source: "metadata_guids", raw: "tmdb://2001", normalized: 2_001, value: 2_001 },
+            tvdb_id: { source: "none", raw: nil, normalized: nil, value: nil }
+          }
+        }
       }
     )
 
@@ -445,6 +460,8 @@ RSpec.describe Sync::TautulliHistorySync, type: :service do
 
     expect(result).to include(rows_processed: 1, watch_stats_upserted: 1, rows_skipped_missing_watchable: 0)
     expect(movie.reload.plex_rating_key).to eq("plex-new-2001")
+    expect(movie.reload.plex_guid).to eq("plex://movie/2001")
+    expect(movie.reload.metadata_json).not_to have_key("provenance")
     expect(WatchStat.where(plex_user:, watchable: movie).count).to eq(1)
   end
 

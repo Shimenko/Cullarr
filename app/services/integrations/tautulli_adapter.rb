@@ -1,5 +1,21 @@
 module Integrations
   class TautulliAdapter < BaseAdapter
+    METADATA_ENDPOINT = "get_metadata".freeze
+    LIBRARY_MEDIA_ENDPOINT = "get_library_media_info".freeze
+    FEED_ROLE_ENRICHMENT = "enrichment_verification".freeze
+    FEED_ROLE_DISCOVERY = "discovery".freeze
+    SOURCE_STRENGTH_STRONG_ENRICHMENT = "strong_enrichment".freeze
+    SOURCE_STRENGTH_SPARSE_DISCOVERY = "sparse_discovery".freeze
+    SOURCE_METADATA_MEDIA_INFO_PARTS_FILE = "metadata_media_info_parts_file".freeze
+    SOURCE_METADATA_GUIDS = "metadata_guids".freeze
+    SOURCE_METADATA_TOP_LEVEL = "metadata_top_level".freeze
+    SOURCE_NONE = "none".freeze
+    TOP_LEVEL_ID_KEYS = {
+      imdb_id: %i[imdb_id imdbId],
+      tmdb_id: %i[tmdb_id tmdbId],
+      tvdb_id: %i[tvdb_id tvdbId]
+    }.freeze
+
     def check_health!
       payload = request_json(
         method: :get,
@@ -51,7 +67,7 @@ module Integrations
         method: :get,
         path: "api/v2",
         params: base_api_params.merge(
-          cmd: "get_library_media_info",
+          cmd: LIBRARY_MEDIA_ENDPOINT,
           section_id: library_id,
           start: start,
           length: length
@@ -64,7 +80,7 @@ module Integrations
       rows = []
       skipped_rows = 0
       raw_rows.each do |row|
-        normalized = normalize_library_media_row(row)
+        normalized = normalize_library_media_row(row, endpoint: LIBRARY_MEDIA_ENDPOINT)
         if normalized.blank?
           skipped_rows += 1
           next
@@ -137,20 +153,23 @@ module Integrations
       payload = request_json(
         method: :get,
         path: "api/v2",
-        params: base_api_params.merge(cmd: "get_metadata", rating_key: rating_key)
+        params: base_api_params.merge(cmd: METADATA_ENDPOINT, rating_key: rating_key)
       )
       data = response_data(payload)
-      guid_external_ids = external_ids_from_guids(
+      guid_entries = external_id_entries_from_guids(
         Array(data["guids"]) + Array(data["parent_guids"]) + Array(data["grandparent_guids"])
       )
+      file_path_signal = metadata_file_path_signal(data)
+      id_signals = TOP_LEVEL_ID_KEYS.keys.index_with do |id_kind|
+        metadata_external_id_signal(data:, guid_entries:, id_kind: id_kind)
+      end
+
       {
         duration_ms: data["duration"]&.to_i,
         plex_guid: data["guid"],
-        external_ids: {
-          imdb_id: guid_external_ids[:imdb_id] || data["imdb_id"]&.presence,
-          tmdb_id: guid_external_ids[:tmdb_id] || integer_or_nil(data["tmdb_id"]),
-          tvdb_id: guid_external_ids[:tvdb_id] || integer_or_nil(data["tvdb_id"])
-        }.compact
+        file_path: file_path_signal[:value],
+        external_ids: id_signals.transform_values { |signal| signal[:value] }.compact,
+        provenance: metadata_provenance(file_path_signal:, id_signals:)
       }
     end
 
@@ -194,7 +213,7 @@ module Integrations
       }
     end
 
-    def normalize_library_media_row(row)
+    def normalize_library_media_row(row, endpoint:)
       media_type = normalize_media_type(first_present(row, :media_type, :mediaType, :type, :library_type))
       return nil unless %w[movie episode].include?(media_type)
 
@@ -215,7 +234,8 @@ module Integrations
         year: integer_or_nil(first_present(row, :year)),
         plex_added_at: timestamp_from_unix(first_present(row, :added_at, :addedAt)),
         file_path: file_path,
-        external_ids: external_ids
+        external_ids: external_ids,
+        provenance: discovery_provenance(endpoint:)
       }.compact
     end
 
@@ -232,6 +252,10 @@ module Integrations
     end
 
     def external_ids_from_guids(guids)
+      external_id_entries_from_guids(guids).transform_values { |entry| entry.fetch(:value) }
+    end
+
+    def external_id_entries_from_guids(guids)
       ids = {}
 
       guids.each do |guid|
@@ -239,7 +263,7 @@ module Integrations
         next if parsed.blank?
 
         key = parsed.fetch(:kind)
-        ids[key] ||= parsed.fetch(:value)
+        ids[key] ||= { value: parsed.fetch(:value), raw: guid }
       end
 
       ids
@@ -269,10 +293,116 @@ module Integrations
     def external_ids_from_row(row)
       guid_external_ids = external_ids_from_guids(Array(first_present(row, :guids, :Guids)))
       {
-        imdb_id: guid_external_ids[:imdb_id] || first_present(row, :imdb_id, :imdbId)&.to_s&.presence,
-        tmdb_id: guid_external_ids[:tmdb_id] || integer_or_nil(first_present(row, :tmdb_id, :tmdbId)),
-        tvdb_id: guid_external_ids[:tvdb_id] || integer_or_nil(first_present(row, :tvdb_id, :tvdbId))
+        imdb_id: guid_external_ids[:imdb_id] || normalize_external_id(kind: :imdb_id, raw_value: first_present(row, *TOP_LEVEL_ID_KEYS.fetch(:imdb_id))),
+        tmdb_id: guid_external_ids[:tmdb_id] || normalize_external_id(kind: :tmdb_id, raw_value: first_present(row, *TOP_LEVEL_ID_KEYS.fetch(:tmdb_id))),
+        tvdb_id: guid_external_ids[:tvdb_id] || normalize_external_id(kind: :tvdb_id, raw_value: first_present(row, *TOP_LEVEL_ID_KEYS.fetch(:tvdb_id)))
       }.compact
+    end
+
+    def metadata_external_id_signal(data:, guid_entries:, id_kind:)
+      guid_entry = guid_entries[id_kind]
+      if guid_entry.present?
+        chosen_value = guid_entry.fetch(:value)
+        return signal_payload(
+          source: SOURCE_METADATA_GUIDS,
+          raw: guid_entry[:raw],
+          normalized: chosen_value,
+          value: chosen_value
+        )
+      end
+
+      raw_top_level = first_present(data, *TOP_LEVEL_ID_KEYS.fetch(id_kind))
+      chosen_value = normalize_external_id(kind: id_kind, raw_value: raw_top_level)
+      return none_signal_payload if chosen_value.blank?
+
+      signal_payload(
+        source: SOURCE_METADATA_TOP_LEVEL,
+        raw: raw_top_level,
+        normalized: chosen_value,
+        value: chosen_value
+      )
+    end
+
+    def metadata_file_path_signal(data)
+      raw_path = first_metadata_file_path(data)
+      normalized_path = raw_path.to_s.strip.presence
+      return none_signal_payload if normalized_path.blank?
+
+      signal_payload(
+        source: SOURCE_METADATA_MEDIA_INFO_PARTS_FILE,
+        raw: raw_path,
+        normalized: normalized_path,
+        value: normalized_path
+      )
+    end
+
+    def first_metadata_file_path(data)
+      Array(data["media_info"]).each do |media_info_row|
+        next unless media_info_row.is_a?(Hash)
+
+        Array(media_info_row["parts"]).each do |part_row|
+          next unless part_row.is_a?(Hash)
+
+          raw_path = part_row["file"]
+          next unless raw_path.is_a?(String)
+
+          return raw_path if raw_path.to_s.strip.present?
+        end
+      end
+
+      nil
+    end
+
+    def normalize_external_id(kind:, raw_value:)
+      case kind
+      when :imdb_id
+        raw_value.to_s.strip.presence
+      when :tmdb_id, :tvdb_id
+        integer_or_nil(raw_value)
+      else
+        nil
+      end
+    end
+
+    def metadata_provenance(file_path_signal:, id_signals:)
+      {
+        endpoint: METADATA_ENDPOINT,
+        feed_role: FEED_ROLE_ENRICHMENT,
+        source_strength: SOURCE_STRENGTH_STRONG_ENRICHMENT,
+        integration_name: integration.name,
+        integration_kind: integration.kind,
+        integration_id: integration.id,
+        signals: {
+          file_path: file_path_signal,
+          imdb_id: id_signals.fetch(:imdb_id),
+          tmdb_id: id_signals.fetch(:tmdb_id),
+          tvdb_id: id_signals.fetch(:tvdb_id)
+        }
+      }
+    end
+
+    def discovery_provenance(endpoint:)
+      {
+        endpoint: endpoint,
+        feed_role: FEED_ROLE_DISCOVERY,
+        source_strength: SOURCE_STRENGTH_SPARSE_DISCOVERY,
+        integration_name: integration.name,
+        integration_kind: integration.kind,
+        integration_id: integration.id
+      }
+    end
+
+    def signal_payload(source:, raw:, normalized:, value:)
+      {
+        source: source,
+        raw: raw,
+        normalized: normalized,
+        value: value
+      }
+    end
+
+    def none_signal_payload
+      signal_payload(source: SOURCE_NONE, raw: nil, normalized: nil, value: nil)
     end
 
     def first_present(hash, *keys)

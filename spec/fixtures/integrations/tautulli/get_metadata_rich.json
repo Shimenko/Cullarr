@@ -1,0 +1,23 @@
+{
+  "response": {
+    "result": "success",
+    "data": {
+      "duration": 7260000,
+      "guid": "plex://movie/701",
+      "imdb_id": "tt-top-level-ignored",
+      "tvdbId": "990701",
+      "guids": [
+        "imdb://tt555001",
+        "tmdb://555001"
+      ],
+      "media_info": [
+        {
+          "parts": [
+            { "file": "   " },
+            { "file": "/mnt/media/movies/Example Movie (2024)/movie.mkv" }
+          ]
+        }
+      ]
+    }
+  }
+}

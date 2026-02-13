@@ -61,15 +61,36 @@ module Sync
 
       threads = Array.new(worker_count) do
         Thread.new do
-          thread_adapter = Integrations::TautulliAdapter.new(integration:)
+          thread_adapter = begin
+            Integrations::TautulliAdapter.new(integration:)
+          rescue StandardError => error
+            log_info(
+              "sync_phase_worker_adapter_init_failed phase=tautulli_metadata " \
+              "integration_id=#{integration.id} error=#{error.class.name}"
+            )
+            nil
+          end
+
           loop do
             watchable = work_queue.pop
             break if watchable.nil?
+
+            if thread_adapter.nil?
+              result_queue << { skipped: true }
+              next
+            end
 
             begin
               metadata = thread_adapter.fetch_metadata(rating_key: watchable.plex_rating_key)
               result_queue << { watchable: watchable, metadata: metadata }
             rescue Integrations::ContractMismatchError
+              result_queue << { skipped: true }
+            rescue StandardError => error
+              log_info(
+                "sync_phase_worker_metadata_lookup_failed phase=tautulli_metadata " \
+                "integration_id=#{integration.id} watchable_type=#{watchable.class.name} " \
+                "watchable_id=#{watchable.id} error=#{error.class.name}"
+              )
               result_queue << { skipped: true }
             end
           end

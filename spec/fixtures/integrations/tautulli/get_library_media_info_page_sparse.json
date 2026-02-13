@@ -1,0 +1,30 @@
+{
+  "response": {
+    "result": "success",
+    "data": {
+      "recordsFiltered": 3,
+      "data": [
+        {
+          "media_type": "movie",
+          "rating_key": "plex-movie-sparse-111",
+          "title": "Sparse Movie",
+          "year": 2024,
+          "added_at": "1700000000",
+          "guid": "plex://movie/sparse-111"
+        },
+        {
+          "media_type": "episode",
+          "rating_key": "plex-episode-sparse-222",
+          "guid": "plex://episode/sparse-222",
+          "grandparent_rating_key": "plex-show-99",
+          "parent_media_index": 1,
+          "media_index": 2
+        },
+        {
+          "media_type": "artist",
+          "rating_key": "plex-artist-333"
+        }
+      ]
+    }
+  }
+}
