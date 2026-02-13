@@ -121,6 +121,50 @@ RSpec.describe "Api::V1::Candidates", type: :request do
       expect(row.fetch("reasons")).to include("watched_by_all_selected_users")
     end
 
+    it "keeps mapping_status outward contract legacy-shaped when internal v2 status is set" do
+      sign_in_operator!
+      integration = Integration.create!(
+        kind: "radarr",
+        name: "Radarr Legacy Freeze",
+        base_url: "https://radarr.legacy-freeze.local",
+        api_key: "secret",
+        verify_ssl: true
+      )
+      movie = Movie.create!(
+        integration: integration,
+        radarr_movie_id: 10_101,
+        title: "Legacy Freeze Movie",
+        plex_rating_key: nil,
+        imdb_id: "tt10101",
+        tmdb_id: 10_101,
+        mapping_status_code: "verified_path",
+        mapping_strategy: "path_match",
+        mapping_status_changed_at: Time.current
+      )
+      MediaFile.create!(
+        attachable: movie,
+        integration: integration,
+        arr_file_id: 30_101,
+        path: "/media/movies/legacy-freeze.mkv",
+        path_canonical: "/media/movies/legacy-freeze.mkv",
+        size_bytes: 2.gigabytes
+      )
+      user = PlexUser.create!(tautulli_user_id: 2101, friendly_name: "Legacy Freeze User", is_hidden: false)
+      WatchStat.create!(plex_user: user, watchable: movie, play_count: 1)
+
+      get "/api/v1/candidates", params: {
+        scope: "movie",
+        plex_user_ids: [ user.id ],
+        watched_match_mode: "all"
+      }, as: :json
+
+      expect(response).to have_http_status(:ok)
+      row = response.parsed_body.fetch("items").find { |item| item.fetch("candidate_id") == "movie:#{movie.id}" }
+      expect(row.dig("mapping_status", "state")).to eq("unmapped")
+      expect(row.dig("mapping_status", "code")).to eq("unmapped_check_path_mapping_between_arr_and_plex")
+      expect(row.dig("mapping_status", "code")).not_to eq("verified_path")
+    end
+
     it "returns tv_episode candidates with contract fields" do
       sign_in_operator!
       integration = Integration.create!(

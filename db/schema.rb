@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_02_09_184716) do
+ActiveRecord::Schema[8.0].define(version: 2026_02_13_031411) do
   create_table "app_settings", force: :cascade do |t|
     t.string "key", null: false
     t.json "value_json", default: {}, null: false
@@ -113,14 +113,20 @@ ActiveRecord::Schema[8.0].define(version: 2026_02_09_184716) do
     t.integer "tmdb_id", limit: 8
     t.string "plex_rating_key"
     t.string "plex_guid"
+    t.string "mapping_status_code", default: "unresolved", null: false
+    t.string "mapping_strategy", default: "no_match", null: false
+    t.json "mapping_diagnostics_json", default: {}, null: false
+    t.datetime "mapping_status_changed_at"
     t.json "metadata_json", default: {}, null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.index ["duration_ms"], name: "index_episodes_on_duration_ms"
     t.index %w[integration_id sonarr_episode_id], name: "index_episodes_on_integration_id_and_sonarr_episode_id", unique: true
     t.index ["integration_id"], name: "index_episodes_on_integration_id"
+    t.index ["mapping_status_code"], name: "index_episodes_on_mapping_status_code"
     t.index ["plex_rating_key"], name: "index_episodes_on_plex_rating_key"
     t.index ["season_id"], name: "index_episodes_on_season_id"
+    t.check_constraint "mapping_status_code IN ('verified_path','verified_external_ids','verified_tv_structure','provisional_title_year','external_source_not_managed','unresolved','ambiguous_conflict')", name: "episodes_mapping_status_code_v2_check"
   end
 
   create_table "integrations", force: :cascade do |t|
@@ -180,14 +186,20 @@ ActiveRecord::Schema[8.0].define(version: 2026_02_09_184716) do
     t.string "plex_rating_key"
     t.string "plex_guid"
     t.integer "duration_ms", limit: 8
+    t.string "mapping_status_code", default: "unresolved", null: false
+    t.string "mapping_strategy", default: "no_match", null: false
+    t.json "mapping_diagnostics_json", default: {}, null: false
+    t.datetime "mapping_status_changed_at"
     t.json "metadata_json", default: {}, null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.index %w[integration_id radarr_movie_id], name: "index_movies_on_integration_id_and_radarr_movie_id", unique: true
     t.index ["integration_id"], name: "index_movies_on_integration_id"
+    t.index ["mapping_status_code"], name: "index_movies_on_mapping_status_code"
     t.index ["plex_rating_key"], name: "index_movies_on_plex_rating_key"
     t.index %w[title year], name: "index_movies_on_title_and_year"
     t.index ["tmdb_id"], name: "index_movies_on_tmdb_id"
+    t.check_constraint "mapping_status_code IN ('verified_path','verified_external_ids','verified_tv_structure','provisional_title_year','external_source_not_managed','unresolved','ambiguous_conflict')", name: "movies_mapping_status_code_v2_check"
   end
 
   create_table "operators", force: :cascade do |t|

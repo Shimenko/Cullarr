@@ -536,7 +536,9 @@ RSpec.describe Candidates::Query, type: :service do
         radarr_movie_id: 7_003,
         title: "Low Confidence Movie",
         plex_rating_key: "plex-7003",
-        metadata_json: { "low_confidence_mapping" => true }
+        mapping_status_code: "provisional_title_year",
+        mapping_strategy: "title_year_fallback",
+        mapping_status_changed_at: Time.current
       )
 
       [ missing_ids_movie, path_mismatch_movie, low_confidence_movie ].each_with_index do |movie, index|
@@ -564,6 +566,348 @@ RSpec.describe Candidates::Query, type: :service do
       expect(rows_by_title.dig("Missing IDs Movie", :mapping_status, :code)).to eq("unmapped_plex_data_missing_identifiers")
       expect(rows_by_title.dig("Path Mismatch Movie", :mapping_status, :code)).to eq("unmapped_check_path_mapping_between_arr_and_plex")
       expect(rows_by_title.dig("Low Confidence Movie", :mapping_status, :code)).to eq("mapped_linked_by_external_ids")
+    end
+
+    it "keeps verified_path outward status unresolved when plex rating key is blank" do
+      integration = create_integration!(name: "Radarr Verified Path Sparse", host: "verified-path-sparse")
+      user = PlexUser.create!(tautulli_user_id: 109, friendly_name: "Sparse Key User", is_hidden: false)
+      movie = Movie.create!(
+        integration: integration,
+        radarr_movie_id: 7_010,
+        title: "Sparse Path Movie",
+        plex_rating_key: nil,
+        imdb_id: "tt07010",
+        tmdb_id: 7010,
+        mapping_status_code: "verified_path",
+        mapping_strategy: "path_match",
+        mapping_status_changed_at: Time.current
+      )
+      MediaFile.create!(
+        attachable: movie,
+        integration: integration,
+        arr_file_id: 8_010,
+        path: "/media/movies/sparse-path.mkv",
+        path_canonical: "/media/movies/sparse-path.mkv",
+        size_bytes: 1.gigabyte
+      )
+      WatchStat.create!(plex_user: user, watchable: movie, play_count: 1)
+
+      result = described_class.new(
+        scope: "movie",
+        plex_user_ids: [ user.id ],
+        include_blocked: false,
+        watched_match_mode: "all",
+        cursor: nil,
+        limit: nil
+      ).call
+
+      row = result.items.find { |item| item[:candidate_id] == "movie:#{movie.id}" }
+      expect(row.dig(:mapping_status, :code)).to eq("unmapped_check_path_mapping_between_arr_and_plex")
+      expect(row.dig(:mapping_status, :state)).to eq("unmapped")
+    end
+
+    it "preserves needs_review_plex_id_conflict precedence over mapped statuses" do
+      integration = create_integration!(name: "Radarr ID Mismatch", host: "id-mismatch")
+      user = PlexUser.create!(tautulli_user_id: 110, friendly_name: "ID Mismatch User", is_hidden: false)
+      movie = Movie.create!(
+        integration: integration,
+        radarr_movie_id: 7_011,
+        title: "ID Mismatch Movie",
+        plex_rating_key: "plex-7011",
+        mapping_status_code: "verified_external_ids",
+        mapping_strategy: "external_ids_match",
+        mapping_status_changed_at: Time.current,
+        metadata_json: { "external_id_mismatch" => true }
+      )
+      MediaFile.create!(
+        attachable: movie,
+        integration: integration,
+        arr_file_id: 8_011,
+        path: "/media/movies/id-mismatch.mkv",
+        path_canonical: "/media/movies/id-mismatch.mkv",
+        size_bytes: 1.gigabyte
+      )
+      WatchStat.create!(plex_user: user, watchable: movie, play_count: 1)
+
+      result = described_class.new(
+        scope: "movie",
+        plex_user_ids: [ user.id ],
+        include_blocked: false,
+        watched_match_mode: "all",
+        cursor: nil,
+        limit: nil
+      ).call
+
+      row = result.items.find { |item| item[:candidate_id] == "movie:#{movie.id}" }
+      expect(row.dig(:mapping_status, :code)).to eq("needs_review_plex_id_conflict")
+      expect(row.dig(:mapping_status, :state)).to eq("needs_review")
+    end
+
+    it "keeps ambiguous_conflict precedence over external_id_mismatch" do
+      integration = create_integration!(name: "Radarr Ambiguous Precedence", host: "ambiguous-precedence")
+      user = PlexUser.create!(tautulli_user_id: 111, friendly_name: "Ambiguous Precedence User", is_hidden: false)
+      movie = Movie.create!(
+        integration: integration,
+        radarr_movie_id: 7_012,
+        title: "Ambiguous Precedence Movie",
+        mapping_status_code: "ambiguous_conflict",
+        mapping_strategy: "conflict_detected",
+        mapping_status_changed_at: Time.current,
+        metadata_json: { "external_id_mismatch" => true }
+      )
+      MediaFile.create!(
+        attachable: movie,
+        integration: integration,
+        arr_file_id: 8_012,
+        path: "/media/movies/ambiguous-precedence.mkv",
+        path_canonical: "/media/movies/ambiguous-precedence.mkv",
+        size_bytes: 1.gigabyte
+      )
+      WatchStat.create!(plex_user: user, watchable: movie, play_count: 1)
+
+      result = described_class.new(
+        scope: "movie",
+        plex_user_ids: [ user.id ],
+        include_blocked: true,
+        watched_match_mode: "all",
+        cursor: nil,
+        limit: nil
+      ).call
+
+      row = result.items.find { |item| item[:candidate_id] == "movie:#{movie.id}" }
+      expect(row.dig(:mapping_status, :code)).to eq("needs_review_conflicting_plex_matches")
+      expect(row[:blocker_flags]).to include("ambiguous_mapping")
+    end
+
+    it "maps verified_tv_structure to mapped_linked_in_plex when plex rating key is present" do
+      integration = Integration.create!(
+        kind: "sonarr",
+        name: "Sonarr TV Structure Freeze",
+        base_url: "https://sonarr.tv-structure-freeze.local",
+        api_key: "secret",
+        verify_ssl: true
+      )
+      user = PlexUser.create!(tautulli_user_id: 114, friendly_name: "TV Structure User", is_hidden: false)
+      series = Series.create!(integration:, sonarr_series_id: 41_001, title: "TV Structure Show")
+      season = Season.create!(series:, season_number: 1)
+      episode = Episode.create!(
+        integration: integration,
+        season: season,
+        sonarr_episode_id: 41_101,
+        episode_number: 1,
+        plex_rating_key: "plex-41101",
+        mapping_status_code: "verified_tv_structure",
+        mapping_strategy: "tv_structure_match",
+        mapping_status_changed_at: Time.current
+      )
+      MediaFile.create!(
+        attachable: episode,
+        integration: integration,
+        arr_file_id: 51_101,
+        path: "/media/tv/tv-structure-freeze.mkv",
+        path_canonical: "/media/tv/tv-structure-freeze.mkv",
+        size_bytes: 1.gigabyte
+      )
+      WatchStat.create!(plex_user: user, watchable: episode, play_count: 1)
+
+      result = described_class.new(
+        scope: "tv_episode",
+        plex_user_ids: [ user.id ],
+        include_blocked: false,
+        watched_match_mode: "all",
+        cursor: nil,
+        limit: nil
+      ).call
+
+      row = result.items.find { |item| item[:candidate_id] == "episode:#{episode.id}" }
+      expect(row.dig(:mapping_status, :code)).to eq("mapped_linked_in_plex")
+      expect(row.dig(:mapping_status, :state)).to eq("mapped")
+    end
+
+    it "keeps external_source_not_managed outward status in unresolved legacy branch" do
+      integration = create_integration!(name: "Radarr External Source Freeze", host: "external-source-freeze")
+      user = PlexUser.create!(tautulli_user_id: 115, friendly_name: "External Source User", is_hidden: false)
+      movie = Movie.create!(
+        integration: integration,
+        radarr_movie_id: 7_014,
+        title: "External Source Movie",
+        imdb_id: "tt07014",
+        tmdb_id: 7014,
+        mapping_status_code: "external_source_not_managed",
+        mapping_strategy: "external_unmanaged_path",
+        mapping_status_changed_at: Time.current
+      )
+      MediaFile.create!(
+        attachable: movie,
+        integration: integration,
+        arr_file_id: 8_014,
+        path: "/external/media/movies/external-source.mkv",
+        path_canonical: "/external/media/movies/external-source.mkv",
+        size_bytes: 1.gigabyte
+      )
+      WatchStat.create!(plex_user: user, watchable: movie, play_count: 1)
+
+      result = described_class.new(
+        scope: "movie",
+        plex_user_ids: [ user.id ],
+        include_blocked: false,
+        watched_match_mode: "all",
+        cursor: nil,
+        limit: nil
+      ).call
+
+      row = result.items.find { |item| item[:candidate_id] == "movie:#{movie.id}" }
+      expect(row.dig(:mapping_status, :code)).to eq("unmapped_check_path_mapping_between_arr_and_plex")
+      expect(row.dig(:mapping_status, :state)).to eq("unmapped")
+    end
+
+    it "ignores legacy mapping booleans when first-class mapping status disagrees" do
+      integration = create_integration!(name: "Radarr Legacy Disagreement", host: "legacy-disagreement")
+      user = PlexUser.create!(tautulli_user_id: 116, friendly_name: "Legacy Disagreement User", is_hidden: false)
+      movie = Movie.create!(
+        integration: integration,
+        radarr_movie_id: 7_013,
+        title: "Legacy Disagreement Movie",
+        plex_rating_key: nil,
+        imdb_id: "tt07013",
+        tmdb_id: 7013,
+        mapping_status_code: "unresolved",
+        mapping_strategy: "no_match",
+        metadata_json: {
+          "low_confidence_mapping" => true,
+          "ambiguous_mapping" => true
+        }
+      )
+      MediaFile.create!(
+        attachable: movie,
+        integration: integration,
+        arr_file_id: 8_013,
+        path: "/media/movies/legacy-disagreement.mkv",
+        path_canonical: "/media/movies/legacy-disagreement.mkv",
+        size_bytes: 1.gigabyte
+      )
+      WatchStat.create!(plex_user: user, watchable: movie, play_count: 1)
+
+      result = described_class.new(
+        scope: "movie",
+        plex_user_ids: [ user.id ],
+        include_blocked: true,
+        watched_match_mode: "all",
+        cursor: nil,
+        limit: nil
+      ).call
+
+      row = result.items.find { |item| item[:candidate_id] == "movie:#{movie.id}" }
+      expect(row.dig(:mapping_status, :code)).to eq("unmapped_check_path_mapping_between_arr_and_plex")
+      expect(row[:risk_flags]).not_to include("low_confidence_mapping")
+      expect(row[:blocker_flags]).not_to include("ambiguous_mapping")
+    end
+
+    it "preserves rollup_mapped_with_external_id_links for season rollups" do
+      integration = Integration.create!(
+        kind: "sonarr",
+        name: "Sonarr Rollup Status Season",
+        base_url: "https://sonarr.rollup-status-season.local",
+        api_key: "secret",
+        verify_ssl: true
+      )
+      series = Series.create!(integration: integration, sonarr_series_id: 21_001, title: "Rollup Status Season")
+      season = Season.create!(series: series, season_number: 1)
+      provisional_episode = Episode.create!(
+        season: season,
+        integration: integration,
+        sonarr_episode_id: 21_101,
+        episode_number: 1,
+        duration_ms: 100_000,
+        mapping_status_code: "provisional_title_year",
+        mapping_strategy: "title_year_fallback",
+        mapping_status_changed_at: Time.current
+      )
+      verified_episode = Episode.create!(
+        season: season,
+        integration: integration,
+        sonarr_episode_id: 21_102,
+        episode_number: 2,
+        duration_ms: 100_000,
+        plex_rating_key: "plex-21102",
+        mapping_status_code: "verified_path",
+        mapping_strategy: "path_match",
+        mapping_status_changed_at: Time.current
+      )
+
+      [ provisional_episode, verified_episode ].each_with_index do |episode, index|
+        MediaFile.create!(
+          attachable: episode,
+          integration: integration,
+          arr_file_id: 31_100 + index,
+          path: "/media/tv/rollup-status-season-#{index}.mkv",
+          path_canonical: "/media/tv/rollup-status-season-#{index}.mkv",
+          size_bytes: 1.gigabyte
+        )
+      end
+
+      user = PlexUser.create!(tautulli_user_id: 112, friendly_name: "Rollup Status Season User", is_hidden: false)
+      WatchStat.create!(plex_user: user, watchable: provisional_episode, play_count: 1)
+      WatchStat.create!(plex_user: user, watchable: verified_episode, play_count: 1)
+
+      result = described_class.new(
+        scope: "tv_season",
+        plex_user_ids: [ user.id ],
+        include_blocked: false,
+        watched_match_mode: "all",
+        cursor: nil,
+        limit: nil
+      ).call
+
+      row = result.items.find { |item| item[:candidate_id] == "season:#{season.id}" }
+      expect(row.dig(:mapping_status, :code)).to eq("rollup_mapped_with_external_id_links")
+      expect(row.dig(:mapping_status, :state)).to eq("mapped")
+    end
+
+    it "preserves rollup_mapped_linked_in_plex for show rollups" do
+      integration = Integration.create!(
+        kind: "sonarr",
+        name: "Sonarr Rollup Status Show",
+        base_url: "https://sonarr.rollup-status-show.local",
+        api_key: "secret",
+        verify_ssl: true
+      )
+      series = Series.create!(integration: integration, sonarr_series_id: 22_001, title: "Rollup Status Show")
+      season = Season.create!(series: series, season_number: 1)
+      episode = Episode.create!(
+        season: season,
+        integration: integration,
+        sonarr_episode_id: 22_101,
+        episode_number: 1,
+        duration_ms: 100_000,
+        plex_rating_key: "plex-22101",
+        mapping_status_code: "verified_path",
+        mapping_strategy: "path_match",
+        mapping_status_changed_at: Time.current
+      )
+      MediaFile.create!(
+        attachable: episode,
+        integration: integration,
+        arr_file_id: 32_101,
+        path: "/media/tv/rollup-status-show.mkv",
+        path_canonical: "/media/tv/rollup-status-show.mkv",
+        size_bytes: 1.gigabyte
+      )
+      user = PlexUser.create!(tautulli_user_id: 113, friendly_name: "Rollup Status Show User", is_hidden: false)
+      WatchStat.create!(plex_user: user, watchable: episode, play_count: 1)
+
+      result = described_class.new(
+        scope: "tv_show",
+        plex_user_ids: [ user.id ],
+        include_blocked: false,
+        watched_match_mode: "all",
+        cursor: nil,
+        limit: nil
+      ).call
+
+      row = result.items.find { |item| item[:candidate_id] == "show:#{series.id}" }
+      expect(row.dig(:mapping_status, :code)).to eq("rollup_mapped_linked_in_plex")
+      expect(row.dig(:mapping_status, :state)).to eq("mapped")
     end
 
     it "prefers ARR-added timestamps over record created_at for added-day reasons" do

@@ -38,8 +38,8 @@ High-level flow:
 |---------------|---------------------------------------|-----------------------------------------------------------------------------------|
 | `series`      | Sonarr show records.                  | `integration_id`, `sonarr_series_id`, `title`                                     |
 | `seasons`     | Season hierarchy under series.        | `series_id`, `season_number`                                                      |
-| `episodes`    | Sonarr episode records.               | `season_id`, `sonarr_episode_id`, `metadata_json`                                 |
-| `movies`      | Radarr movie records.                 | `integration_id`, `radarr_movie_id`, `metadata_json`                              |
+| `episodes`    | Sonarr episode records.               | `season_id`, `sonarr_episode_id`, `mapping_status_code`, `mapping_strategy`, `mapping_diagnostics_json` |
+| `movies`      | Radarr movie records.                 | `integration_id`, `radarr_movie_id`, `mapping_status_code`, `mapping_strategy`, `mapping_diagnostics_json` |
 | `media_files` | File-level delete unit.               | `attachable_type`, `attachable_id`, `arr_file_id`, `path_canonical`, `size_bytes` |
 | `arr_tags`    | Tag state mirrored from integrations. | `integration_id`, `name`, `arr_tag_id`                                            |
 
@@ -78,6 +78,17 @@ Cullarr must map integration file paths to local/Plex-visible paths correctly.
 If mapping confidence is low or ownership appears split across integrations, guardrails can block execution with:
 - `guardrail_ambiguous_mapping`
 - `guardrail_ambiguous_ownership`
+
+## Mapping state source of truth
+
+Mapping status is first-class on watchables (`movies` and `episodes`) via:
+- `mapping_status_code`
+- `mapping_strategy`
+- `mapping_diagnostics_json`
+- `mapping_status_changed_at`
+
+Legacy metadata booleans like `metadata_json["low_confidence_mapping"]` and `metadata_json["ambiguous_mapping"]`
+are no longer authoritative for runtime mapping decisions.
 
 ## TV scope behavior in the data model
 

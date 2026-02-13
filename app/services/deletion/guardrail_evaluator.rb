@@ -81,8 +81,9 @@ module Deletion
     end
 
     def ambiguous_mapping?(attachable)
-      metadata = attachable.respond_to?(:metadata_json) ? attachable.metadata_json : {}
-      ActiveModel::Type::Boolean.new.cast(metadata.is_a?(Hash) ? metadata["ambiguous_mapping"] : false)
+      return false unless attachable.respond_to?(:mapping_status_code)
+
+      attachable.mapping_status_code.to_s == "ambiguous_conflict"
     end
 
     def ambiguous_ownership?(path_canonical)

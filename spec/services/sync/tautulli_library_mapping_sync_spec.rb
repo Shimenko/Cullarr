@@ -75,8 +75,10 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
     movie.reload
     expect(movie.plex_rating_key).to eq("plex-movie-42")
     expect(movie.plex_guid).to eq("plex://movie/42")
-    expect(movie.metadata_json["ambiguous_mapping"]).to be(false)
-    expect(movie.metadata_json["low_confidence_mapping"]).to be(false)
+    expect(movie.mapping_status_code).to eq("verified_path")
+    expect(movie.mapping_strategy).to eq("path_match")
+    expect(movie.mapping_status_changed_at).to be_present
+    expect(movie.mapping_diagnostics_json).to include("version" => "v2", "selected_step" => "path")
 
     state = tautulli.reload.settings_json.fetch("library_mapping_state")
     expect(state["last_run_at"]).to be_present
@@ -145,8 +147,9 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
     episode.reload
     expect(episode.plex_rating_key).to eq("plex-episode-701")
     expect(episode.plex_guid).to eq("plex://episode/701")
-    expect(episode.metadata_json["low_confidence_mapping"]).to be(true)
-    expect(episode.metadata_json["ambiguous_mapping"]).to be(false)
+    expect(episode.mapping_status_code).to eq("verified_external_ids")
+    expect(episode.mapping_strategy).to eq("external_ids_match")
+    expect(episode.mapping_diagnostics_json).to include("version" => "v2", "selected_step" => "external_ids")
   end
 
   it "marks ambiguous mapping on external-id conflicts without overriding existing plex rating keys" do
@@ -202,7 +205,9 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
     expect(result).to include(rows_ambiguous: 1, rows_mapped_by_external_ids: 0)
     movie.reload
     expect(movie.plex_rating_key).to eq("plex-old-key")
-    expect(movie.metadata_json["ambiguous_mapping"]).to be(true)
+    expect(movie.mapping_status_code).to eq("ambiguous_conflict")
+    expect(movie.mapping_strategy).to eq("conflict_detected")
+    expect(movie.mapping_diagnostics_json["conflict_reason"]).to eq("plex_rating_key_conflict")
   end
 
   it "falls back to unique movie title and year when path and external ids are missing" do
@@ -262,7 +267,8 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
     movie.reload
     expect(movie.plex_rating_key).to eq("plex-movie-6001")
     expect(movie.plex_guid).to eq("plex://movie/6001")
-    expect(movie.metadata_json["low_confidence_mapping"]).to be(true)
+    expect(movie.mapping_status_code).to eq("provisional_title_year")
+    expect(movie.mapping_strategy).to eq("title_year_fallback")
     expect(movie.metadata_json["plex_added_at"]).to eq("2024-10-09T01:54:18Z")
   end
 end

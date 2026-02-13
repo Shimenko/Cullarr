@@ -397,8 +397,20 @@ module Sync
           if confidence == :path
             attrs[:plex_rating_key] = incoming_rating_key
           else
-            metadata["ambiguous_mapping"] = true
-            watchable.update!(metadata_json: metadata) if metadata_changed?(watchable.metadata_json, metadata)
+            metadata["plex_added_at"] = row[:plex_added_at] if row[:plex_added_at].present?
+            attrs[:metadata_json] = metadata if metadata_changed?(watchable.metadata_json, metadata)
+            attrs.merge!(
+              watchable.mapping_state_attributes_for(
+                status_code: "ambiguous_conflict",
+                strategy: "conflict_detected",
+                diagnostics: mapping_diagnostics_for(
+                  row: row,
+                  confidence: confidence,
+                  conflict_reason: "plex_rating_key_conflict"
+                )
+              )
+            )
+            persist_watchable_changes!(watchable:, attrs:)
             return :ambiguous
           end
         end
@@ -410,19 +422,16 @@ module Sync
       end
 
       metadata["plex_added_at"] = row[:plex_added_at] if row[:plex_added_at].present?
-      if confidence == :path
-        metadata["ambiguous_mapping"] = false
-        metadata["low_confidence_mapping"] = false
-      else
-        metadata["ambiguous_mapping"] = false
-        metadata["low_confidence_mapping"] = true
-      end
       attrs[:metadata_json] = metadata if metadata_changed?(watchable.metadata_json, metadata)
+      attrs.merge!(
+        watchable.mapping_state_attributes_for(
+          status_code: mapping_status_for_confidence(confidence),
+          strategy: mapping_strategy_for_confidence(confidence),
+          diagnostics: mapping_diagnostics_for(row:, confidence:)
+        )
+      )
 
-      return :unchanged if attrs.empty?
-
-      watchable.update!(attrs)
-      :updated
+      persist_watchable_changes!(watchable:, attrs:)
     end
 
     def normalized_path_for(raw_path)
@@ -455,6 +464,59 @@ module Sync
     def metadata_changed?(current, desired)
       current_hash = current.is_a?(Hash) ? current : {}
       current_hash != desired
+    end
+
+    def persist_watchable_changes!(watchable:, attrs:)
+      watchable.assign_attributes(attrs)
+      return :unchanged unless watchable.changed?
+
+      watchable.save!
+      :updated
+    end
+
+    def mapping_status_for_confidence(confidence)
+      case confidence
+      when :path
+        "verified_path"
+      when :external_ids
+        "verified_external_ids"
+      when :title_year
+        "provisional_title_year"
+      else
+        "unresolved"
+      end
+    end
+
+    def mapping_strategy_for_confidence(confidence)
+      case confidence
+      when :path
+        "path_match"
+      when :external_ids
+        "external_ids_match"
+      when :title_year
+        "title_year_fallback"
+      else
+        "no_match"
+      end
+    end
+
+    def mapping_diagnostics_for(row:, confidence:, conflict_reason: nil)
+      diagnostics = {
+        version: "v2",
+        attempt_order: [ "path", "external_ids", "tv_structure", "title_year" ],
+        selected_step: confidence.to_s,
+        signals: {
+          media_type: row[:media_type],
+          plex_rating_key: row[:plex_rating_key],
+          plex_guid: row[:plex_guid],
+          file_path: row[:file_path],
+          title: row[:title],
+          year: row[:year],
+          external_ids: row[:external_ids]
+        }.compact
+      }
+      diagnostics[:conflict_reason] = conflict_reason if conflict_reason.present?
+      diagnostics
     end
 
     def normalized_title_for_match(value)

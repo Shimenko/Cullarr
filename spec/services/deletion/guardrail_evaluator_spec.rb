@@ -94,14 +94,16 @@ RSpec.describe Deletion::GuardrailEvaluator, type: :service do
     expect(result.error_codes).to include("guardrail_in_progress")
   end
 
-  it "returns ambiguous_mapping when attachable metadata flags ambiguity" do
+  it "returns ambiguous_mapping when attachable mapping status is ambiguous_conflict" do
     integration = create_radarr_integration!(name: "Radarr Ambiguous", host: "radarr-ambiguous")
     movie = Movie.create!(
       integration: integration,
       radarr_movie_id: 901,
       title: "Ambiguous Mapping Movie",
       duration_ms: 200_000,
-      metadata_json: { "ambiguous_mapping" => true }
+      mapping_status_code: "ambiguous_conflict",
+      mapping_strategy: "conflict_detected",
+      mapping_status_changed_at: Time.current
     )
     media_file = MediaFile.create!(
       attachable: movie,

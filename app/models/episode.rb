@@ -1,4 +1,6 @@
 class Episode < ApplicationRecord
+  include MappingState
+
   belongs_to :integration
   belongs_to :season
 

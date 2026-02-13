@@ -512,13 +512,13 @@ module Candidates
       risk_flags << "multiple_versions" if media_files.size > 1
       risk_flags << "no_plex_mapping" if movie.plex_rating_key.blank?
       risk_flags << "external_id_mismatch" if flag_enabled?(movie.metadata_json, "external_id_mismatch")
-      risk_flags << "low_confidence_mapping" if flag_enabled?(movie.metadata_json, "low_confidence_mapping")
+      risk_flags << "low_confidence_mapping" if low_confidence_mapping_for?(movie)
 
       blocker_flags = []
       blocker_flags << "path_excluded" if path_excluded?(media_files)
       blocker_flags << "keep_marked" if movie.keep_markers.any?
       blocker_flags << "in_progress_any" if in_progress_any?(watchable: movie, stats_by_user_id:, selected_user_ids:)
-      blocker_flags << "ambiguous_mapping" if flag_enabled?(movie.metadata_json, "ambiguous_mapping")
+      blocker_flags << "ambiguous_mapping" if ambiguous_mapping_for?(movie)
       blocker_flags << "ambiguous_ownership" if ambiguous_ownership?(media_files)
 
       {
@@ -687,13 +687,13 @@ module Candidates
       risk_flags << "multiple_versions" if media_files.size > 1
       risk_flags << "no_plex_mapping" if episode.plex_rating_key.blank?
       risk_flags << "external_id_mismatch" if flag_enabled?(episode.metadata_json, "external_id_mismatch")
-      risk_flags << "low_confidence_mapping" if flag_enabled?(episode.metadata_json, "low_confidence_mapping")
+      risk_flags << "low_confidence_mapping" if low_confidence_mapping_for?(episode)
 
       blocker_flags = []
       blocker_flags << "path_excluded" if path_excluded?(media_files)
       blocker_flags << "keep_marked" if keep_marked_episode?(episode)
       blocker_flags << "in_progress_any" if in_progress_any?(watchable: episode, stats_by_user_id:, selected_user_ids:)
-      blocker_flags << "ambiguous_mapping" if flag_enabled?(episode.metadata_json, "ambiguous_mapping")
+      blocker_flags << "ambiguous_mapping" if ambiguous_mapping_for?(episode)
       blocker_flags << "ambiguous_ownership" if ambiguous_ownership?(media_files)
 
       {
@@ -870,10 +870,16 @@ module Candidates
     end
 
     def mapping_status_for_watchable(watchable:, media_files:, integration:)
-      return { code: "needs_review_conflicting_plex_matches", state: "needs_review" } if flag_enabled?(watchable.metadata_json, "ambiguous_mapping")
+      status_code = watchable.mapping_status_code.to_s
+
+      return { code: "needs_review_conflicting_plex_matches", state: "needs_review" } if status_code == "ambiguous_conflict"
+      # Slice B freeze: keep legacy mismatch precedence until Slice G public contract cutover.
       return { code: "needs_review_plex_id_conflict", state: "needs_review" } if flag_enabled?(watchable.metadata_json, "external_id_mismatch")
-      return { code: "mapped_linked_by_external_ids", state: "mapped" } if flag_enabled?(watchable.metadata_json, "low_confidence_mapping")
-      return { code: "mapped_linked_in_plex", state: "mapped" } if watchable.plex_rating_key.present?
+      return { code: "mapped_linked_by_external_ids", state: "mapped" } if %w[verified_external_ids provisional_title_year].include?(status_code)
+
+      if %w[verified_path verified_tv_structure].include?(status_code) && watchable.plex_rating_key.present?
+        return { code: "mapped_linked_in_plex", state: "mapped" }
+      end
 
       {
         code: unresolved_mapping_code_for(watchable:, media_files:, integration:),
@@ -929,6 +935,14 @@ module Candidates
 
     def watched_mode
       @watched_mode ||= AppSetting.db_value_for("watched_mode").to_s
+    end
+
+    def low_confidence_mapping_for?(watchable)
+      watchable.mapping_status_code.to_s == "provisional_title_year"
+    end
+
+    def ambiguous_mapping_for?(watchable)
+      watchable.mapping_status_code.to_s == "ambiguous_conflict"
     end
 
     def watched_percent_threshold

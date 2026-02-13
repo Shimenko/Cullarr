@@ -1,4 +1,6 @@
 class Movie < ApplicationRecord
+  include MappingState
+
   belongs_to :integration
 
   has_many :media_files, as: :attachable, dependent: :destroy
