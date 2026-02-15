@@ -76,7 +76,8 @@ RSpec.describe "Candidates", type: :system do
 
     expect(page).to have_content("Eligible Unified Movie")
     expect(page).to have_css(".ui-chip.ui-chip-instance", text: integration.name)
-    expect(page).to have_css(".ui-chip.ui-chip-warning", text: "Unmapped: Plex data missing path/IDs")
+    expect(page).to have_css(".ui-chip.ui-chip-warning", text: "Unresolved mapping")
+    expect(page).to have_text("Recommended action: Check path mappings and external IDs, then rerun sync.")
     expect(page).not_to have_content("Blocked Unified Movie")
 
     check "Include blocked candidates"

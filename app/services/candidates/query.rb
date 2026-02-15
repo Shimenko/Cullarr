@@ -36,6 +36,52 @@ module Candidates
       "ambiguous_ownership" => "cullarr.guardrail.blocked_ambiguous_ownership"
     }.freeze
 
+    MAPPING_STATUS_CODES = %w[
+      verified_path
+      verified_external_ids
+      verified_tv_structure
+      provisional_title_year
+      external_source_not_managed
+      unresolved
+      ambiguous_conflict
+    ].freeze
+    MAPPING_STATUS_STATES = {
+      "verified_path" => "verified",
+      "verified_external_ids" => "verified",
+      "verified_tv_structure" => "verified",
+      "provisional_title_year" => "provisional",
+      "external_source_not_managed" => "external",
+      "unresolved" => "unresolved",
+      "ambiguous_conflict" => "ambiguous"
+    }.freeze
+    VERIFICATION_ORDER = %w[path external_ids tv_structure title_year].freeze
+    VERIFICATION_STEPS = VERIFICATION_ORDER.freeze
+    VERIFICATION_OUTCOMES = %w[passed failed skipped not_applicable].freeze
+    SELECTED_STEPS = %w[path external_ids tv_structure title_year none].freeze
+    RECHECK_OUTCOMES = %w[success skipped failed not_eligible not_attempted].freeze
+    CONFLICT_REASONS = %w[
+      id_conflicts_with_provisional
+      multiple_path_candidates
+      multiple_external_id_candidates
+      type_mismatch
+      plex_rating_key_conflict
+      strong_signal_disagreement
+    ].freeze
+    OWNERSHIP_CLASSIFICATIONS = %w[managed external unknown].freeze
+    ROLLUP_REASON_NO_EPISODE_MEDIA_FILES = "no_episode_media_files".freeze
+    ROLLUP_REASON_ALL_EPISODES_SINGLE_STATUS = "all_episodes_single_status".freeze
+    ROLLUP_REASON_MIXED_EPISODE_STATUSES = "mixed_episode_statuses".freeze
+    ROLLUP_STATUS_PRECEDENCE = %w[
+      ambiguous_conflict
+      unresolved
+      provisional_title_year
+      external_source_not_managed
+      verified_tv_structure
+      verified_external_ids
+      verified_path
+    ].freeze
+    ROLLUP_DIAGNOSTICS_MAX_EPISODE_IDS_PER_STATUS = 5
+
     def initialize(
       scope:,
       saved_view_id: nil,
@@ -502,9 +548,8 @@ module Candidates
       watched_summary = watched_summary_for(watchable: movie, stats_by_user_id:, selected_user_ids:)
       media_files = movie.media_files
       reclaimable_bytes = media_files.sum(&:size_bytes)
-      mapping_status = mapping_status_for_watchable(
+      mapping_payload = mapping_payload_for_watchable(
         watchable: movie,
-        media_files: media_files,
         integration: movie.integration
       )
 
@@ -529,7 +574,8 @@ module Candidates
         integration_chips: integration_chips_for(fallback_integration: movie.integration, media_files:),
         reclaimable_bytes: reclaimable_bytes,
         watched_summary: watched_summary,
-        mapping_status: mapping_status,
+        mapping_status: mapping_payload.fetch(:mapping_status),
+        mapping_diagnostics: mapping_payload.fetch(:mapping_diagnostics),
         risk_flags: risk_flags,
         blocker_flags: blocker_flags,
         reasons: reasons_for(
@@ -557,6 +603,7 @@ module Candidates
         reclaimable_bytes: snapshot[:reclaimable_bytes],
         watched_summary: snapshot[:watched_summary],
         mapping_status: snapshot[:mapping_status],
+        mapping_diagnostics: snapshot[:mapping_diagnostics],
         risk_flags: snapshot[:risk_flags],
         blocker_flags: snapshot[:blocker_flags],
         reasons: reasons_for(
@@ -580,7 +627,7 @@ module Candidates
       reclaimable_bytes = media_files.sum(&:size_bytes)
       episode_count = snapshots.size
       eligible_episode_count = snapshots.count { |snapshot| snapshot[:eligible] }
-      mapping_status = mapping_status_for_rollup(snapshots:)
+      rollup_mapping_payload = mapping_payload_for_rollup(snapshots:)
 
       risk_flags = snapshots.flat_map { |snapshot| snapshot[:risk_flags] }.uniq
       blocker_flags = snapshots.flat_map { |snapshot| snapshot[:blocker_flags] }.uniq
@@ -594,7 +641,8 @@ module Candidates
         integration_chips: integration_chips_for(fallback_integration: season.series.integration, media_files:),
         reclaimable_bytes: reclaimable_bytes,
         watched_summary: watched_summary,
-        mapping_status: mapping_status,
+        mapping_status: rollup_mapping_payload.fetch(:mapping_status),
+        mapping_diagnostics: rollup_mapping_payload.fetch(:mapping_diagnostics),
         risk_flags: risk_flags,
         blocker_flags: blocker_flags.uniq,
         reasons: reasons_for(added_at: season.created_at, watched_summary:, reclaimable_bytes:),
@@ -616,7 +664,7 @@ module Candidates
       reclaimable_bytes = media_files.sum(&:size_bytes)
       episode_count = snapshots.size
       eligible_episode_count = snapshots.count { |snapshot| snapshot[:eligible] }
-      mapping_status = mapping_status_for_rollup(snapshots:)
+      rollup_mapping_payload = mapping_payload_for_rollup(snapshots:)
 
       risk_flags = snapshots.flat_map { |snapshot| snapshot[:risk_flags] }.uniq
       blocker_flags = snapshots.flat_map { |snapshot| snapshot[:blocker_flags] }.uniq
@@ -630,7 +678,8 @@ module Candidates
         integration_chips: integration_chips_for(fallback_integration: series.integration, media_files:),
         reclaimable_bytes: reclaimable_bytes,
         watched_summary: watched_summary,
-        mapping_status: mapping_status,
+        mapping_status: rollup_mapping_payload.fetch(:mapping_status),
+        mapping_diagnostics: rollup_mapping_payload.fetch(:mapping_diagnostics),
         risk_flags: risk_flags,
         blocker_flags: blocker_flags.uniq,
         reasons: reasons_for(
@@ -677,9 +726,8 @@ module Candidates
       watched_summary = watched_summary_for(watchable: episode, stats_by_user_id:, selected_user_ids:)
       media_files = episode.media_files
       reclaimable_bytes = media_files.sum(&:size_bytes)
-      mapping_status = mapping_status_for_watchable(
+      mapping_payload = mapping_payload_for_watchable(
         watchable: episode,
-        media_files: media_files,
         integration: episode.integration
       )
 
@@ -701,7 +749,9 @@ module Candidates
         stats_by_user_id: stats_by_user_id,
         watched_summary: watched_summary,
         media_files: media_files,
-        mapping_status: mapping_status,
+        mapping_status: mapping_payload.fetch(:mapping_status),
+        mapping_diagnostics: mapping_payload.fetch(:mapping_diagnostics),
+        mapping_status_code: mapping_payload.fetch(:mapping_status).fetch(:code),
         reclaimable_bytes: reclaimable_bytes,
         risk_flags: risk_flags.uniq,
         blocker_flags: blocker_flags.uniq,
@@ -869,68 +919,315 @@ module Candidates
       chips
     end
 
-    def mapping_status_for_watchable(watchable:, media_files:, integration:)
-      status_code = watchable.mapping_status_code.to_s
-
-      return { code: "needs_review_conflicting_plex_matches", state: "needs_review" } if status_code == "ambiguous_conflict"
-      # Slice B freeze: keep legacy mismatch precedence until Slice G public contract cutover.
-      return { code: "needs_review_plex_id_conflict", state: "needs_review" } if flag_enabled?(watchable.metadata_json, "external_id_mismatch")
-      return { code: "mapped_linked_by_external_ids", state: "mapped" } if %w[verified_external_ids provisional_title_year].include?(status_code)
-
-      if %w[verified_path verified_tv_structure].include?(status_code) && watchable.plex_rating_key.present?
-        return { code: "mapped_linked_in_plex", state: "mapped" }
-      end
+    def mapping_payload_for_watchable(watchable:, integration:)
+      status_code = normalized_mapping_status_code_for_watchable(watchable)
+      diagnostics = watchable_mapping_diagnostics_for(watchable:, integration:, status_code:)
 
       {
-        code: unresolved_mapping_code_for(watchable:, media_files:, integration:),
-        state: "unmapped"
+        mapping_status: {
+          code: status_code,
+          state: mapping_status_state_for(status_code),
+          details: mapping_status_details_for_watchable(status_code:, diagnostics:, watchable:)
+        },
+        mapping_diagnostics: diagnostics
       }
     end
 
-    def unresolved_mapping_code_for(watchable:, media_files:, integration:)
-      return "unmapped_plex_data_missing_identifiers" unless watchable_has_external_ids?(watchable)
+    def mapping_payload_for_rollup(snapshots:)
+      status_by_episode = Hash.new { |hash, key| hash[key] = [] }
 
-      if integration_has_enabled_path_mappings?(integration)
-        "unmapped_found_in_arr_not_linked_in_plex"
-      elsif media_files.any?
-        "unmapped_check_path_mapping_between_arr_and_plex"
+      snapshots.each do |snapshot|
+        status_code = normalized_mapping_status_code(snapshot[:mapping_status_code])
+        status_by_episode[status_code] << snapshot.fetch(:episode).id
+      end
+
+      status_counts = status_counts_for_rollup(status_by_episode:)
+      non_zero_status_count = status_counts.values.count(&:positive?)
+      worst_status_code = worst_rollup_status_code_for(status_counts:)
+      rollup_reason = rollup_reason_for(total_episode_count: snapshots.size, non_zero_status_count:)
+      worst_status_episode_ids = worst_status_episode_ids_for_rollup(status_by_episode:)
+      diagnostics = {
+        "kind" => "rollup",
+        "schema_version" => "v2_candidate",
+        "total_episode_count" => snapshots.size,
+        "status_counts" => status_counts,
+        "worst_status_code" => worst_status_code,
+        "worst_status_episode_ids" => worst_status_episode_ids,
+        "id_cap_per_status" => ROLLUP_DIAGNOSTICS_MAX_EPISODE_IDS_PER_STATUS,
+        "rollup_reason" => rollup_reason
+      }
+
+      {
+        mapping_status: {
+          code: worst_status_code,
+          state: mapping_status_state_for(worst_status_code),
+          details: mapping_status_details_for_rollup(
+            status_code: worst_status_code,
+            diagnostics: diagnostics
+          )
+        },
+        mapping_diagnostics: diagnostics
+      }
+    end
+
+    def normalized_mapping_status_code_for_watchable(watchable)
+      normalized_mapping_status_code(watchable.mapping_status_code)
+    end
+
+    def normalized_mapping_status_code(status_code)
+      normalized_code = status_code.to_s
+      return normalized_code if MAPPING_STATUS_CODES.include?(normalized_code)
+
+      "unresolved"
+    end
+
+    def mapping_status_state_for(status_code)
+      MAPPING_STATUS_STATES.fetch(status_code.to_s, "unresolved")
+    end
+
+    def mapping_status_details_for_watchable(status_code:, diagnostics:, watchable:)
+      selected_step = diagnostics.fetch("selected_step", "none")
+      ownership = diagnostics.dig("path", "ownership_classification").to_s
+      matched_root = diagnostics.dig("path", "matched_managed_root").presence || "none"
+      ids = diagnostics.dig("ids", "considered") || {}
+      ids_compact = ids.filter { |_key, value| value.present? }.map { |key, value| "#{key}=#{value}" }.join(", ")
+      ids_compact = "none" if ids_compact.blank?
+      show_source = diagnostics.dig("tv_structure", "show_identity_source").presence || "none"
+      season_number = diagnostics.dig("tv_structure", "season_episode_keys", "season_number") || watchable.try(:season)&.season_number
+      episode_number = diagnostics.dig("tv_structure", "season_episode_keys", "episode_number") || watchable.try(:episode_number)
+      fallback_used = ActiveModel::Type::Boolean.new.cast(diagnostics.dig("tv_structure", "fallback_used"))
+      recheck_outcome = diagnostics.dig("promotion_conflict", "recheck_outcome").presence || "not_attempted"
+      recheck_reason = diagnostics.dig("promotion_conflict", "recheck_reason").presence || "none"
+      conflict_reason = diagnostics.dig("promotion_conflict", "conflict_reason").presence || diagnostics.dig("ids", "conflict_reason").presence || "none"
+      winning_source = diagnostics.dig("ids", "winning_source").presence || "none"
+
+      case status_code.to_s
+      when "verified_path"
+        "Matched by path. ownership=#{ownership}; root=#{matched_root}; selected_step=#{selected_step}."
+      when "verified_external_ids"
+        "Matched by external IDs. winning_source=#{winning_source}; ids=#{ids_compact}; selected_step=#{selected_step}."
+      when "verified_tv_structure"
+        "Matched by TV structure. show_source=#{show_source}; S#{season_number || '?'}E#{episode_number || '?'}; fallback_used=#{fallback_used}."
+      when "provisional_title_year"
+        "Provisional title/year match. recheck_outcome=#{recheck_outcome}; recheck_reason=#{recheck_reason}."
+      when "external_source_not_managed"
+        "Classified as external source. ownership=external; root=none."
+      when "unresolved"
+        "Unresolved after verification order. selected_step=#{selected_step}; recheck_outcome=#{recheck_outcome}."
+      when "ambiguous_conflict"
+        "Ambiguous conflict. reason=#{conflict_reason}; selected_step=#{selected_step}."
       else
-        "unmapped_found_in_arr_not_linked_in_plex"
+        "Mapping status available; open diagnostics for evidence."
       end
     end
 
-    def watchable_has_external_ids?(watchable)
-      return watchable.tmdb_id.present? || watchable.imdb_id.present? if watchable.is_a?(Movie)
+    def mapping_status_details_for_rollup(status_code:, diagnostics:)
+      non_zero_status_count = diagnostics.fetch("status_counts", {}).values.count(&:positive?)
 
-      watchable.tvdb_id.present? || watchable.tmdb_id.present? || watchable.imdb_id.present?
+      "Rollup status=#{status_code}; reason=#{diagnostics.fetch('rollup_reason', ROLLUP_REASON_NO_EPISODE_MEDIA_FILES)}; " \
+        "episodes=#{diagnostics.fetch('total_episode_count', 0)}; mixed=#{non_zero_status_count}."
     end
 
-    def integration_has_enabled_path_mappings?(integration)
-      return false if integration.blank?
+    def watchable_mapping_diagnostics_for(watchable:, integration:, status_code:)
+      source = watchable.mapping_diagnostics_json.is_a?(Hash) ? watchable.mapping_diagnostics_json.deep_stringify_keys : {}
+      selected_step = selected_step_for_watchable(status_code:, source:)
+      path_source = source["path"].is_a?(Hash) ? source["path"] : {}
+      signals = source["signals"].is_a?(Hash) ? source["signals"] : {}
+      ids_source = source["ids"].is_a?(Hash) ? source["ids"] : {}
+      tv_structure_source = source["tv_structure"].is_a?(Hash) ? source["tv_structure"] : {}
+      promotion_source = source["promotion_conflict"].is_a?(Hash) ? source["promotion_conflict"] : {}
+      provenance_source = source["provenance"].is_a?(Hash) ? source["provenance"] : {}
+      ownership = normalize_ownership(path_source["ownership"])
+      conflict_reason = normalized_conflict_reason(
+        source["conflict_reason"] || ids_source["conflict_reason"] || promotion_source["conflict_reason"]
+      )
+      season_episode_keys = tv_structure_source["season_episode_keys"].is_a?(Hash) ? tv_structure_source["season_episode_keys"] : {}
 
-      @enabled_path_mapping_cache ||= {}
-      return @enabled_path_mapping_cache[integration.id] if @enabled_path_mapping_cache.key?(integration.id)
-
-      @enabled_path_mapping_cache[integration.id] = integration.path_mappings.where(enabled: true).exists?
+      {
+        "kind" => "watchable",
+        "schema_version" => "v2_candidate",
+        "verification_order" => VERIFICATION_ORDER,
+        "verification_outcomes" => verification_outcomes_for(
+          watchable: watchable,
+          selected_step: selected_step
+        ),
+        "selected_step" => selected_step,
+        "provenance" => {
+          "integration_name" => integration&.name,
+          "integration_kind" => integration&.kind,
+          "discovery_endpoint" => provenance_source.dig("discovery", "endpoint"),
+          "enrichment_endpoint" => provenance_source.dig("enrichment", "endpoint"),
+          "recheck_endpoint" => provenance_source.dig("recheck_enrichment", "endpoint") || provenance_source.dig("recheck_show_enrichment", "endpoint"),
+          "raw_values" => {
+            "file_path" => signals["file_path"] || path_source["raw_path"],
+            "title" => signals["title"] || watchable.try(:title),
+            "year" => signals["year"] || watchable.try(:year),
+            "plex_guid" => signals["plex_guid"],
+            "plex_rating_key" => signals["plex_rating_key"] || watchable.try(:plex_rating_key),
+            "imdb_id" => watchable.try(:imdb_id),
+            "tmdb_id" => watchable.try(:tmdb_id),
+            "tvdb_id" => watchable.try(:tvdb_id),
+            "parent_rating_key" => signals["parent_rating_key"],
+            "grandparent_rating_key" => signals["grandparent_rating_key"],
+            "parent_media_index" => signals["parent_media_index"],
+            "media_index" => signals["media_index"]
+          },
+          "normalized_values" => {
+            "canonical_path" => path_source["canonical_path"],
+            "normalized_path" => path_source["normalized_path"],
+            "ownership_classification" => ownership,
+            "matched_managed_root" => path_source["matched_managed_root"],
+            "imdb_id" => watchable.try(:imdb_id),
+            "tmdb_id" => watchable.try(:tmdb_id),
+            "tvdb_id" => watchable.try(:tvdb_id),
+            "season_number" => watchable.try(:season)&.season_number,
+            "episode_number" => watchable.try(:episode_number)
+          }
+        },
+        "path" => {
+          "raw_path" => path_source["raw_path"],
+          "normalized_path" => path_source["normalized_path"],
+          "ownership_classification" => ownership,
+          "matched_managed_root" => path_source["matched_managed_root"]
+        },
+        "ids" => {
+          "considered" => watchable_external_ids_for(watchable),
+          "winning_source" => selected_step == "none" ? "none" : selected_step,
+          "conflict_reason" => conflict_reason
+        },
+        "tv_structure" => {
+          "show_identity_source" => tv_structure_source["show_identity_source"] || tv_structure_source["show_resolution_status"] || "none",
+          "season_episode_keys" => {
+            "season_number" => season_episode_keys["season_number"] || watchable.try(:season)&.season_number,
+            "episode_number" => season_episode_keys["episode_number"] || watchable.try(:episode_number)
+          },
+          "fallback_used" => ActiveModel::Type::Boolean.new.cast(tv_structure_source["fallback_used"])
+        },
+        "promotion_conflict" => {
+          "first_pass_status" => promotion_source["first_pass_status"] || source.dig("first_pass", "status_code") || status_code,
+          "final_status" => promotion_source["final_status"] || status_code,
+          "recheck_outcome" => normalize_recheck_outcome(
+            promotion_source["recheck_outcome"] || source.dig("recheck", "state")
+          ),
+          "recheck_reason" => promotion_source["recheck_reason"] || source.dig("recheck", "reason"),
+          "conflict_reason" => conflict_reason
+        }
+      }
     end
 
-    def mapping_status_for_rollup(snapshots:)
-      statuses = snapshots.map { |snapshot| snapshot[:mapping_status] }.compact
-      return { code: "rollup_unmapped_contains_unlinked_items", state: "unmapped" } if statuses.empty?
+    def selected_step_for_watchable(status_code:, source:)
+      explicit_selected_step = source["selected_step"] || source.dig("first_pass", "selected_step")
+      normalized_selected_step = normalize_selected_step(explicit_selected_step)
+      return normalized_selected_step unless normalized_selected_step == "none"
 
-      if statuses.any? { |status| status[:state] == "needs_review" }
-        return { code: "rollup_needs_review_contains_conflicts", state: "needs_review" }
+      case status_code.to_s
+      when "verified_path"
+        "path"
+      when "verified_external_ids"
+        "external_ids"
+      when "verified_tv_structure"
+        "tv_structure"
+      when "provisional_title_year"
+        "title_year"
+      else
+        "none"
+      end
+    end
+
+    def verification_outcomes_for(watchable:, selected_step:)
+      outcomes = {
+        "path" => "not_applicable",
+        "external_ids" => "not_applicable",
+        "tv_structure" => "not_applicable",
+        "title_year" => "not_applicable"
+      }
+
+      applicable_steps = if watchable.is_a?(Movie)
+        %w[path external_ids title_year]
+      elsif watchable.is_a?(Episode)
+        %w[path external_ids tv_structure]
+      else
+        []
+      end
+      if applicable_steps.include?(selected_step)
+        selected_index = applicable_steps.index(selected_step)
+        applicable_steps.each_with_index do |step, index|
+          outcomes[step] = if index < selected_index
+            "failed"
+          elsif index == selected_index
+            "passed"
+          else
+            "skipped"
+          end
+        end
+      else
+        applicable_steps.each { |step| outcomes[step] = "failed" }
       end
 
-      if statuses.any? { |status| status[:state] == "unmapped" }
-        return { code: "rollup_unmapped_contains_unlinked_items", state: "unmapped" }
-      end
+      outcomes
+    end
 
-      if statuses.any? { |status| status[:code] == "mapped_linked_by_external_ids" }
-        return { code: "rollup_mapped_with_external_id_links", state: "mapped" }
-      end
+    def watchable_external_ids_for(watchable)
+      {
+        "imdb_id" => watchable.try(:imdb_id),
+        "tmdb_id" => watchable.try(:tmdb_id),
+        "tvdb_id" => watchable.try(:tvdb_id)
+      }
+    end
 
-      { code: "rollup_mapped_linked_in_plex", state: "mapped" }
+    def normalize_selected_step(value)
+      selected_step = value.to_s
+      return selected_step if SELECTED_STEPS.include?(selected_step)
+
+      "none"
+    end
+
+    def normalize_recheck_outcome(value)
+      normalized_value = value.to_s
+      return normalized_value if RECHECK_OUTCOMES.include?(normalized_value)
+
+      "not_attempted"
+    end
+
+    def normalized_conflict_reason(value)
+      normalized_value = value.to_s
+      return normalized_value if CONFLICT_REASONS.include?(normalized_value)
+
+      nil
+    end
+
+    def normalize_ownership(value)
+      normalized_value = value.to_s
+      return normalized_value if OWNERSHIP_CLASSIFICATIONS.include?(normalized_value)
+
+      "unknown"
+    end
+
+    def status_counts_for_rollup(status_by_episode:)
+      MAPPING_STATUS_CODES.each_with_object({}) do |status_code, counts|
+        counts[status_code] = status_by_episode.fetch(status_code, []).size
+      end
+    end
+
+    def worst_rollup_status_code_for(status_counts:)
+      ROLLUP_STATUS_PRECEDENCE.find { |status_code| status_counts.fetch(status_code, 0).positive? } || "unresolved"
+    end
+
+    def rollup_reason_for(total_episode_count:, non_zero_status_count:)
+      return ROLLUP_REASON_NO_EPISODE_MEDIA_FILES if total_episode_count.zero?
+      return ROLLUP_REASON_ALL_EPISODES_SINGLE_STATUS if non_zero_status_count <= 1
+
+      ROLLUP_REASON_MIXED_EPISODE_STATUSES
+    end
+
+    def worst_status_episode_ids_for_rollup(status_by_episode:)
+      MAPPING_STATUS_CODES.each_with_object({}) do |status_code, result|
+        result[status_code] = status_by_episode
+          .fetch(status_code, [])
+          .uniq
+          .sort
+          .first(ROLLUP_DIAGNOSTICS_MAX_EPISODE_IDS_PER_STATUS)
+      end
     end
 
     def watched_mode

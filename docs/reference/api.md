@@ -249,6 +249,64 @@ Response shape:
 }
 ```
 
+`items[*].mapping_status` contract (required):
+
+- required keys: `code`, `state`, `details`
+- `code` enum:
+  - `verified_path`
+  - `verified_external_ids`
+  - `verified_tv_structure`
+  - `provisional_title_year`
+  - `external_source_not_managed`
+  - `unresolved`
+  - `ambiguous_conflict`
+- `state` enum:
+  - `verified`
+  - `provisional`
+  - `external`
+  - `unresolved`
+  - `ambiguous`
+- `details`: required non-empty summary string
+- note: `next_action` is intentionally not returned by API in Slice G; UI derives it from `mapping_status.code`
+
+`items[*].mapping_diagnostics` contract (required):
+
+- always present and always an object
+- watchable rows (`movie`, `tv_episode`) require keys:
+  - `kind`, `schema_version`, `verification_order`, `verification_outcomes`, `selected_step`, `provenance`, `path`, `ids`, `tv_structure`, `promotion_conflict`
+- rollup rows (`tv_season`, `tv_show`) require keys:
+  - `kind`, `schema_version`, `total_episode_count`, `status_counts`, `worst_status_code`, `worst_status_episode_ids`, `id_cap_per_status`, `rollup_reason`
+
+Nested defaults/enums:
+
+- `verification_outcomes.path|external_ids|tv_structure|title_year`: `passed|failed|skipped|not_applicable` (default `not_applicable`)
+- `selected_step`: `path|external_ids|tv_structure|title_year|none` (default `none`)
+- `ids.winning_source`: `path|external_ids|tv_structure|title_year|none` (default `none`)
+- `promotion_conflict.recheck_outcome`: `success|skipped|failed|not_eligible|not_attempted` (default `not_attempted`)
+- `ids.conflict_reason` and `promotion_conflict.conflict_reason`:
+  - `id_conflicts_with_provisional|multiple_path_candidates|multiple_external_id_candidates|type_mismatch|plex_rating_key_conflict|strong_signal_disagreement|null` (default `null`)
+- `path.ownership_classification`: `managed|external|unknown` (default `unknown`)
+
+Provenance key bounds:
+
+- `provenance.raw_values` allowed keys only:
+  - `file_path`, `title`, `year`, `plex_guid`, `plex_rating_key`, `imdb_id`, `tmdb_id`, `tvdb_id`, `parent_rating_key`, `grandparent_rating_key`, `parent_media_index`, `media_index`
+- `provenance.normalized_values` allowed keys only:
+  - `canonical_path`, `normalized_path`, `ownership_classification`, `matched_managed_root`, `imdb_id`, `tmdb_id`, `tvdb_id`, `season_number`, `episode_number`
+- unknown keys are dropped at response boundary
+
+Rollup determinism:
+
+- `status_counts` and `worst_status_episode_ids` always include all seven mapping status code keys
+- `id_cap_per_status` is fixed at `5`
+- `worst_status_episode_ids[status]` is unique episode IDs, sorted ascending, truncated to five
+- `worst_status_code` precedence:
+  - `ambiguous_conflict` > `unresolved` > `provisional_title_year` > `external_source_not_managed` > `verified_tv_structure` > `verified_external_ids` > `verified_path`
+- `rollup_reason` enum:
+  - `no_episode_media_files`
+  - `all_episodes_single_status`
+  - `mixed_episode_statuses`
+
 ## `POST /api/v1/integrations`
 
 ```json

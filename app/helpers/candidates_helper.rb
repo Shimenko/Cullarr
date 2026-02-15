@@ -37,31 +37,33 @@ module CandidatesHelper
   }.freeze
 
   MAPPING_STATUS_LABELS = {
-    "mapped_linked_in_plex" => "Mapped: Linked in Plex",
-    "mapped_linked_by_external_ids" => "Mapped: Linked by fallback metadata (review recommended)",
-    "needs_review_conflicting_plex_matches" => "Needs review: Multiple possible Plex matches",
-    "needs_review_plex_id_conflict" => "Needs review: Plex identifiers conflict",
-    "unmapped_check_path_mapping_between_arr_and_plex" => "Unmapped: Path mismatch between ARR and Plex",
-    "unmapped_plex_data_missing_identifiers" => "Unmapped: Plex data missing path/IDs",
-    "unmapped_found_in_arr_not_linked_in_plex" => "Unmapped: Found in Sonarr/Radarr, not linked to Plex yet",
-    "rollup_mapped_linked_in_plex" => "Mapped: All episodes linked in Plex",
-    "rollup_mapped_with_external_id_links" => "Mapped: Some episodes linked by external IDs",
-    "rollup_unmapped_contains_unlinked_items" => "Unmapped: Rollup includes unlinked episodes",
-    "rollup_needs_review_contains_conflicts" => "Needs review: Rollup includes mapping conflicts"
+    "verified_path" => "Verified by path",
+    "verified_external_ids" => "Verified by external IDs",
+    "verified_tv_structure" => "Verified by TV structure",
+    "provisional_title_year" => "Provisional title/year match",
+    "external_source_not_managed" => "External source not managed",
+    "unresolved" => "Unresolved mapping",
+    "ambiguous_conflict" => "Ambiguous conflict"
   }.freeze
 
   MAPPING_STATUS_HINTS = {
-    "mapped_linked_in_plex" => "Identity mapping is stable and linked by Plex key.",
-    "mapped_linked_by_external_ids" => "Linked through fallback metadata (for example external IDs or title/year). Verify before delete.",
-    "needs_review_conflicting_plex_matches" => "Multiple candidates matched the same Plex identity. Resolve before deletion.",
-    "needs_review_plex_id_conflict" => "External IDs disagree with existing Plex identity metadata.",
-    "unmapped_check_path_mapping_between_arr_and_plex" => "Configure ARR-to-Plex path mapping (for example /storage/... -> /home/... ).",
-    "unmapped_plex_data_missing_identifiers" => "Tautulli/Plex did not provide enough path or external-ID data to match.",
-    "unmapped_found_in_arr_not_linked_in_plex" => "Item exists in Sonarr/Radarr but is not linked to a Plex item yet.",
-    "rollup_mapped_linked_in_plex" => "Every episode in this rollup is mapped to Plex.",
-    "rollup_mapped_with_external_id_links" => "Rollup is mapped, but some episodes rely on external-ID fallback matching.",
-    "rollup_unmapped_contains_unlinked_items" => "At least one episode is not linked to Plex yet.",
-    "rollup_needs_review_contains_conflicts" => "At least one episode has mapping conflicts that require review."
+    "verified_path" => "Path-based verification passed.",
+    "verified_external_ids" => "External ID verification passed.",
+    "verified_tv_structure" => "TV structure verification passed.",
+    "provisional_title_year" => "This match is provisional until a stronger recheck confirms it.",
+    "external_source_not_managed" => "The mapped file path is outside managed roots.",
+    "unresolved" => "No strong mapping signal produced a verified match.",
+    "ambiguous_conflict" => "Conflicting strong signals were detected."
+  }.freeze
+
+  MAPPING_STATUS_NEXT_ACTIONS = {
+    "verified_path" => "No action needed.",
+    "verified_external_ids" => "Spot-check IDs if this match looks unexpected.",
+    "verified_tv_structure" => "Spot-check show/season/episode linkage.",
+    "provisional_title_year" => "Run sync recheck and verify IDs before deletion.",
+    "external_source_not_managed" => "Review managed path roots and path mappings if this should be ARR-owned.",
+    "unresolved" => "Check path mappings and external IDs, then rerun sync.",
+    "ambiguous_conflict" => "Resolve source conflict before deletion."
   }.freeze
 
   HIDDEN_MAPPING_RISK_FLAGS = %w[
@@ -104,13 +106,19 @@ module CandidatesHelper
 
   def candidate_mapping_status_chip_kind(mapping_status_state)
     case mapping_status_state.to_s
-    when "mapped"
+    when "verified"
       :success
-    when "needs_review"
+    when "ambiguous"
       :blocker
+    when "external"
+      :info
     else
       :warning
     end
+  end
+
+  def candidate_mapping_status_next_action(mapping_status_code)
+    MAPPING_STATUS_NEXT_ACTIONS.fetch(mapping_status_code.to_s, "Inspect mapping diagnostics before proceeding.")
   end
 
   def candidate_display_risk_flags(risk_flags)

@@ -154,6 +154,14 @@
                 <% if mapping_hint.present? %>
                   <p class="ui-help"><%= mapping_hint %></p>
                 <% end %>
+                <% mapping_details = item.dig(:mapping_status, :details).to_s %>
+                <% if mapping_details.present? %>
+                  <p class="ui-copy"><%= mapping_details %></p>
+                <% end %>
+                <p class="ui-help">
+                  Recommended action:
+                  <span class="ui-copy"><%= candidate_mapping_status_next_action(item.dig(:mapping_status, :code)) %></span>
+                </p>
               </div>
             <% end %>
 
@@ -224,6 +232,25 @@
                 </p>
               </div>
             </details>
+            <% if item[:mapping_diagnostics].present? %>
+              <% mapping_diagnostics = item[:mapping_diagnostics].with_indifferent_access %>
+              <details>
+                <summary class="ui-copy cursor-pointer">Mapping diagnostics</summary>
+                <div class="ui-row-expand-content ui-copy space-y-1">
+                  <p>Kind: <%= mapping_diagnostics[:kind] %></p>
+                  <% if mapping_diagnostics[:kind] == "rollup" %>
+                    <p>Worst status: <%= mapping_diagnostics[:worst_status_code] %></p>
+                    <p>Rollup reason: <%= mapping_diagnostics[:rollup_reason] %></p>
+                    <p>Episode count: <%= mapping_diagnostics[:total_episode_count] %></p>
+                  <% else %>
+                    <p>Selected step: <%= mapping_diagnostics[:selected_step] %></p>
+                    <p>Conflict reason: <%= mapping_diagnostics.dig(:promotion_conflict, :conflict_reason).presence || "none" %></p>
+                    <p>Ownership: <%= mapping_diagnostics.dig(:path, :ownership_classification).presence || "unknown" %></p>
+                    <p>Recheck outcome: <%= mapping_diagnostics.dig(:promotion_conflict, :recheck_outcome).presence || "not_attempted" %></p>
+                  <% end %>
+                </div>
+              </details>
+            <% end %>
           </article>
         <% end %>
       </div>

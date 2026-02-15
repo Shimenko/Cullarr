@@ -107,7 +107,7 @@ Example 2 (container vs host style):
 - From Prefix: `/tv`
 - To Prefix: `/media/tv`
 
-If paths are wrong, matching quality drops and you may see “needs review” or ownership conflicts.
+If paths are wrong, matching quality drops and you may see source-aware mapping statuses like `unresolved`, `provisional_title_year`, `external_source_not_managed`, or `ambiguous_conflict`.
 
 ## 6) Optional integration URL policy
 

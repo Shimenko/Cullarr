@@ -115,13 +115,22 @@ RSpec.describe "Api::V1::Candidates", type: :request do
       expect(row.fetch("multi_version_groups")).to eq({ "movie:#{movie.id}" => row.fetch("media_file_ids") })
       expect(row.fetch("risk_flags")).to include("multiple_versions")
       expect(row.fetch("blocker_flags")).to eq([])
-      expect(row.dig("mapping_status", "state")).to eq("unmapped")
-      expect(row.dig("mapping_status", "code")).to be_present
+      expect(row.dig("mapping_status", "state")).to eq("unresolved")
+      expect(row.dig("mapping_status", "code")).to eq("unresolved")
+      expect(row.dig("mapping_status", "details")).to be_present
+      expect(row.fetch("mapping_diagnostics")).to include(
+        "kind" => "watchable",
+        "schema_version" => "v2_candidate"
+      )
+      expect(row.dig("mapping_diagnostics", "verification_outcomes").keys).to contain_exactly(
+        "path", "external_ids", "tv_structure", "title_year"
+      )
+      expect(row.dig("mapping_status", "next_action")).to be_nil
       expect(row.dig("watched_summary", "all_selected_users_watched")).to be(true)
       expect(row.fetch("reasons")).to include("watched_by_all_selected_users")
     end
 
-    it "keeps mapping_status in the current outward contract snapshot pre-Slice G when internal v2 status is set" do
+    it "returns first-class v2 mapping_status when internal v2 status is set" do
       sign_in_operator!
       integration = Integration.create!(
         kind: "radarr",
@@ -160,9 +169,15 @@ RSpec.describe "Api::V1::Candidates", type: :request do
 
       expect(response).to have_http_status(:ok)
       row = response.parsed_body.fetch("items").find { |item| item.fetch("candidate_id") == "movie:#{movie.id}" }
-      expect(row.dig("mapping_status", "state")).to eq("unmapped")
-      expect(row.dig("mapping_status", "code")).to eq("unmapped_check_path_mapping_between_arr_and_plex")
-      expect(row.dig("mapping_status", "code")).not_to eq("verified_path")
+      expect(row.dig("mapping_status", "state")).to eq("verified")
+      expect(row.dig("mapping_status", "code")).to eq("verified_path")
+      expect(row.dig("mapping_status", "details")).to be_present
+      expect(row.dig("mapping_diagnostics", "verification_outcomes")).to eq(
+        "path" => "passed",
+        "external_ids" => "skipped",
+        "tv_structure" => "not_applicable",
+        "title_year" => "skipped"
+      )
     end
 
     it "returns tv_episode candidates with contract fields" do
@@ -278,6 +293,22 @@ RSpec.describe "Api::V1::Candidates", type: :request do
       expect(row.fetch("episode_count")).to eq(2)
       expect(row.fetch("eligible_episode_count")).to eq(1)
       expect(row.fetch("blocker_flags")).to include("in_progress_any", "rollup_not_strictly_eligible")
+      expect(row.fetch("mapping_diagnostics")).to include(
+        "kind" => "rollup",
+        "schema_version" => "v2_candidate",
+        "id_cap_per_status" => 5
+      )
+      expected_status_keys = %w[
+        verified_path
+        verified_external_ids
+        verified_tv_structure
+        provisional_title_year
+        external_source_not_managed
+        unresolved
+        ambiguous_conflict
+      ]
+      expect(row.dig("mapping_diagnostics", "status_counts").keys).to match_array(expected_status_keys)
+      expect(row.dig("mapping_diagnostics", "worst_status_episode_ids").keys).to match_array(expected_status_keys)
     end
 
     it "returns tv_show rollups with strict eligibility blocker metadata" do
@@ -340,6 +371,107 @@ RSpec.describe "Api::V1::Candidates", type: :request do
       expect(row.fetch("episode_count")).to eq(2)
       expect(row.fetch("eligible_episode_count")).to eq(1)
       expect(row.fetch("blocker_flags")).to include("keep_marked", "rollup_not_strictly_eligible")
+      expect(row.dig("mapping_diagnostics", "status_counts").keys).to contain_exactly(
+        "verified_path",
+        "verified_external_ids",
+        "verified_tv_structure",
+        "provisional_title_year",
+        "external_source_not_managed",
+        "unresolved",
+        "ambiguous_conflict"
+      )
+    end
+
+    it "drops unknown provenance keys from mapping_diagnostics at API boundary" do
+      sign_in_operator!
+      integration = Integration.create!(
+        kind: "radarr",
+        name: "Radarr Provenance Filter",
+        base_url: "https://radarr.provenance-filter.local",
+        api_key: "secret",
+        verify_ssl: true
+      )
+      movie = Movie.create!(
+        integration: integration,
+        radarr_movie_id: 10_202,
+        title: "Provenance Filter Movie",
+        mapping_status_code: "verified_external_ids",
+        mapping_strategy: "external_ids_match",
+        mapping_status_changed_at: Time.current,
+        mapping_diagnostics_json: {
+          "selected_step" => "external_ids",
+          "provenance" => {
+            "discovery" => { "endpoint" => "library_media_info" },
+            "enrichment" => { "endpoint" => "get_metadata" },
+            "unknown_top_level" => "drop-me",
+            "raw_values" => { "unknown_raw" => "drop-me-too" },
+            "normalized_values" => { "unknown_normalized" => "drop-me-three" }
+          },
+          "signals" => {
+            "title" => "Provenance Filter Movie",
+            "year" => 2024,
+            "plex_guid" => "plex://movie/provenance-filter"
+          }
+        }
+      )
+      MediaFile.create!(
+        attachable: movie,
+        integration: integration,
+        arr_file_id: 30_202,
+        path: "/media/movies/provenance-filter.mkv",
+        path_canonical: "/media/movies/provenance-filter.mkv",
+        size_bytes: 2.gigabytes
+      )
+      user = PlexUser.create!(tautulli_user_id: 2202, friendly_name: "Provenance User", is_hidden: false)
+      WatchStat.create!(plex_user: user, watchable: movie, play_count: 1)
+
+      get "/api/v1/candidates", params: {
+        scope: "movie",
+        plex_user_ids: [ user.id ],
+        watched_match_mode: "all"
+      }, as: :json
+
+      expect(response).to have_http_status(:ok)
+      row = response.parsed_body.fetch("items").find { |item| item.fetch("candidate_id") == "movie:#{movie.id}" }
+      provenance = row.dig("mapping_diagnostics", "provenance")
+      expect(provenance).to include(
+        "integration_name" => integration.name,
+        "integration_kind" => integration.kind,
+        "discovery_endpoint" => "library_media_info",
+        "enrichment_endpoint" => "get_metadata"
+      )
+      expect(provenance).not_to have_key("unknown_top_level")
+      expect(provenance.fetch("raw_values")).not_to have_key("unknown_raw")
+      expect(provenance.fetch("normalized_values")).not_to have_key("unknown_normalized")
+    end
+
+    it "returns deterministic empty-rollup diagnostics defaults for season rows with no episode media files" do
+      sign_in_operator!
+      integration = Integration.create!(
+        kind: "sonarr",
+        name: "Sonarr Empty Rollup API",
+        base_url: "https://sonarr.empty-rollup-api.local",
+        api_key: "secret",
+        verify_ssl: true
+      )
+      series = Series.create!(integration: integration, sonarr_series_id: 2801, title: "Empty Rollup API")
+      season = Season.create!(series: series, season_number: 1)
+
+      get "/api/v1/candidates", params: {
+        scope: "tv_season",
+        include_blocked: true,
+        watched_match_mode: "none"
+      }, as: :json
+
+      expect(response).to have_http_status(:ok)
+      row = response.parsed_body.fetch("items").find { |item| item.fetch("candidate_id") == "season:#{season.id}" }
+      expect(row).to be_present
+      expect(row.dig("mapping_status", "code")).to eq("unresolved")
+      expect(row.dig("mapping_diagnostics", "kind")).to eq("rollup")
+      expect(row.dig("mapping_diagnostics", "total_episode_count")).to eq(0)
+      expect(row.dig("mapping_diagnostics", "rollup_reason")).to eq("no_episode_media_files")
+      expect(row.dig("mapping_diagnostics", "worst_status_code")).to eq("unresolved")
+      expect(row.dig("mapping_diagnostics", "worst_status_episode_ids", "unresolved")).to eq([])
     end
 
     it "hides blocked rows by default and returns them when include_blocked=true" do

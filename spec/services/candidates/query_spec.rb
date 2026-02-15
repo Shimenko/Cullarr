@@ -1,6 +1,6 @@
 require "rails_helper"
 
-# rubocop:disable RSpec/ExampleLength
+# rubocop:disable RSpec/ExampleLength, RSpec/MultipleExpectations
 RSpec.describe Candidates::Query, type: :service do
   it "keeps guardrail event names aligned with the event schema catalog" do
     expect(described_class::GUARDRAIL_EVENT_BY_FLAG).to eq(
@@ -511,7 +511,7 @@ RSpec.describe Candidates::Query, type: :service do
       expect(row[:blocker_flags]).to include("path_excluded", "ambiguous_ownership")
     end
 
-    it "classifies plain-language mapping statuses for movie candidates" do
+    it "classifies v2 mapping statuses for movie candidates" do
       integration = create_integration!(name: "Radarr Mapping Status", host: "mapping-status")
       user = PlexUser.create!(tautulli_user_id: 107, friendly_name: "Mapping Status User", is_hidden: false)
 
@@ -563,12 +563,22 @@ RSpec.describe Candidates::Query, type: :service do
       ).call
 
       rows_by_title = result.items.index_by { |row| row[:title] }
-      expect(rows_by_title.dig("Missing IDs Movie", :mapping_status, :code)).to eq("unmapped_plex_data_missing_identifiers")
-      expect(rows_by_title.dig("Path Mismatch Movie", :mapping_status, :code)).to eq("unmapped_check_path_mapping_between_arr_and_plex")
-      expect(rows_by_title.dig("Low Confidence Movie", :mapping_status, :code)).to eq("mapped_linked_by_external_ids")
+      expect(rows_by_title.dig("Missing IDs Movie", :mapping_status, :code)).to eq("unresolved")
+      expect(rows_by_title.dig("Missing IDs Movie", :mapping_status, :state)).to eq("unresolved")
+      expect(rows_by_title.dig("Path Mismatch Movie", :mapping_status, :code)).to eq("unresolved")
+      expect(rows_by_title.dig("Low Confidence Movie", :mapping_status, :code)).to eq("provisional_title_year")
+      expect(rows_by_title.dig("Low Confidence Movie", :mapping_status, :state)).to eq("provisional")
+      expect(rows_by_title.dig("Low Confidence Movie", :mapping_status, :details)).to be_present
+      expect(rows_by_title.dig("Low Confidence Movie", :mapping_diagnostics, "kind")).to eq("watchable")
+      expect(rows_by_title.dig("Low Confidence Movie", :mapping_diagnostics, "verification_outcomes")).to eq(
+        "path" => "failed",
+        "external_ids" => "failed",
+        "tv_structure" => "not_applicable",
+        "title_year" => "passed"
+      )
     end
 
-    it "keeps verified_path outward status unresolved when plex rating key is blank" do
+    it "keeps verified_path outward status verified when plex rating key is blank" do
       integration = create_integration!(name: "Radarr Verified Path Sparse", host: "verified-path-sparse")
       user = PlexUser.create!(tautulli_user_id: 109, friendly_name: "Sparse Key User", is_hidden: false)
       movie = Movie.create!(
@@ -602,11 +612,17 @@ RSpec.describe Candidates::Query, type: :service do
       ).call
 
       row = result.items.find { |item| item[:candidate_id] == "movie:#{movie.id}" }
-      expect(row.dig(:mapping_status, :code)).to eq("unmapped_check_path_mapping_between_arr_and_plex")
-      expect(row.dig(:mapping_status, :state)).to eq("unmapped")
+      expect(row.dig(:mapping_status, :code)).to eq("verified_path")
+      expect(row.dig(:mapping_status, :state)).to eq("verified")
+      expect(row.dig(:mapping_diagnostics, "verification_outcomes")).to eq(
+        "path" => "passed",
+        "external_ids" => "skipped",
+        "tv_structure" => "not_applicable",
+        "title_year" => "skipped"
+      )
     end
 
-    it "preserves needs_review_plex_id_conflict precedence over mapped statuses" do
+    it "does not override v2 mapping status with legacy external_id_mismatch metadata flag" do
       integration = create_integration!(name: "Radarr ID Mismatch", host: "id-mismatch")
       user = PlexUser.create!(tautulli_user_id: 110, friendly_name: "ID Mismatch User", is_hidden: false)
       movie = Movie.create!(
@@ -639,8 +655,9 @@ RSpec.describe Candidates::Query, type: :service do
       ).call
 
       row = result.items.find { |item| item[:candidate_id] == "movie:#{movie.id}" }
-      expect(row.dig(:mapping_status, :code)).to eq("needs_review_plex_id_conflict")
-      expect(row.dig(:mapping_status, :state)).to eq("needs_review")
+      expect(row.dig(:mapping_status, :code)).to eq("verified_external_ids")
+      expect(row.dig(:mapping_status, :state)).to eq("verified")
+      expect(row[:risk_flags]).to include("external_id_mismatch")
     end
 
     it "keeps ambiguous_conflict precedence over external_id_mismatch" do
@@ -675,11 +692,12 @@ RSpec.describe Candidates::Query, type: :service do
       ).call
 
       row = result.items.find { |item| item[:candidate_id] == "movie:#{movie.id}" }
-      expect(row.dig(:mapping_status, :code)).to eq("needs_review_conflicting_plex_matches")
+      expect(row.dig(:mapping_status, :code)).to eq("ambiguous_conflict")
+      expect(row.dig(:mapping_status, :state)).to eq("ambiguous")
       expect(row[:blocker_flags]).to include("ambiguous_mapping")
     end
 
-    it "maps verified_tv_structure to mapped_linked_in_plex when plex rating key is present" do
+    it "maps verified_tv_structure directly to v2 outward contract" do
       integration = Integration.create!(
         kind: "sonarr",
         name: "Sonarr TV Structure Freeze",
@@ -720,11 +738,17 @@ RSpec.describe Candidates::Query, type: :service do
       ).call
 
       row = result.items.find { |item| item[:candidate_id] == "episode:#{episode.id}" }
-      expect(row.dig(:mapping_status, :code)).to eq("mapped_linked_in_plex")
-      expect(row.dig(:mapping_status, :state)).to eq("mapped")
+      expect(row.dig(:mapping_status, :code)).to eq("verified_tv_structure")
+      expect(row.dig(:mapping_status, :state)).to eq("verified")
+      expect(row.dig(:mapping_diagnostics, "verification_outcomes")).to eq(
+        "path" => "failed",
+        "external_ids" => "failed",
+        "tv_structure" => "passed",
+        "title_year" => "not_applicable"
+      )
     end
 
-    it "keeps external_source_not_managed in the current outward contract snapshot pre-Slice G" do
+    it "keeps external_source_not_managed explicit in outward contract" do
       integration = create_integration!(name: "Radarr External Source Freeze", host: "external-source-freeze")
       user = PlexUser.create!(tautulli_user_id: 115, friendly_name: "External Source User", is_hidden: false)
       movie = Movie.create!(
@@ -757,8 +781,8 @@ RSpec.describe Candidates::Query, type: :service do
       ).call
 
       row = result.items.find { |item| item[:candidate_id] == "movie:#{movie.id}" }
-      expect(row.dig(:mapping_status, :code)).to eq("unmapped_check_path_mapping_between_arr_and_plex")
-      expect(row.dig(:mapping_status, :state)).to eq("unmapped")
+      expect(row.dig(:mapping_status, :code)).to eq("external_source_not_managed")
+      expect(row.dig(:mapping_status, :state)).to eq("external")
     end
 
     it "ignores legacy mapping booleans when first-class mapping status disagrees" do
@@ -798,12 +822,13 @@ RSpec.describe Candidates::Query, type: :service do
       ).call
 
       row = result.items.find { |item| item[:candidate_id] == "movie:#{movie.id}" }
-      expect(row.dig(:mapping_status, :code)).to eq("unmapped_check_path_mapping_between_arr_and_plex")
+      expect(row.dig(:mapping_status, :code)).to eq("unresolved")
+      expect(row.dig(:mapping_status, :state)).to eq("unresolved")
       expect(row[:risk_flags]).not_to include("low_confidence_mapping")
       expect(row[:blocker_flags]).not_to include("ambiguous_mapping")
     end
 
-    it "preserves rollup_mapped_with_external_id_links for season rollups" do
+    it "uses fail-closed precedence for season rollup mapping statuses" do
       integration = Integration.create!(
         kind: "sonarr",
         name: "Sonarr Rollup Status Season",
@@ -860,11 +885,12 @@ RSpec.describe Candidates::Query, type: :service do
       ).call
 
       row = result.items.find { |item| item[:candidate_id] == "season:#{season.id}" }
-      expect(row.dig(:mapping_status, :code)).to eq("rollup_mapped_with_external_id_links")
-      expect(row.dig(:mapping_status, :state)).to eq("mapped")
+      expect(row.dig(:mapping_status, :code)).to eq("provisional_title_year")
+      expect(row.dig(:mapping_status, :state)).to eq("provisional")
+      expect(row.dig(:mapping_diagnostics, "kind")).to eq("rollup")
     end
 
-    it "preserves rollup_mapped_linked_in_plex for show rollups" do
+    it "keeps verified rollup status when all episodes are verified_path" do
       integration = Integration.create!(
         kind: "sonarr",
         name: "Sonarr Rollup Status Show",
@@ -906,8 +932,101 @@ RSpec.describe Candidates::Query, type: :service do
       ).call
 
       row = result.items.find { |item| item[:candidate_id] == "show:#{series.id}" }
-      expect(row.dig(:mapping_status, :code)).to eq("rollup_mapped_linked_in_plex")
-      expect(row.dig(:mapping_status, :state)).to eq("mapped")
+      expect(row.dig(:mapping_status, :code)).to eq("verified_path")
+      expect(row.dig(:mapping_status, :state)).to eq("verified")
+    end
+
+    it "emits deterministic rollup diagnostics keys and capped sorted episode IDs" do
+      integration = Integration.create!(
+        kind: "sonarr",
+        name: "Sonarr Rollup Diagnostics Keys",
+        base_url: "https://sonarr.rollup-diagnostics-keys.local",
+        api_key: "secret",
+        verify_ssl: true
+      )
+      series = Series.create!(integration: integration, sonarr_series_id: 23_001, title: "Rollup Diagnostics Show")
+      season = Season.create!(series: series, season_number: 1)
+      user = PlexUser.create!(tautulli_user_id: 117, friendly_name: "Rollup Diagnostics User", is_hidden: false)
+
+      ambiguous_episode_ids = []
+      6.times do |index|
+        episode = Episode.create!(
+          season: season,
+          integration: integration,
+          sonarr_episode_id: 23_100 + index,
+          episode_number: index + 1,
+          mapping_status_code: "ambiguous_conflict",
+          mapping_strategy: "conflict_detected",
+          duration_ms: 100_000
+        )
+        MediaFile.create!(
+          attachable: episode,
+          integration: integration,
+          arr_file_id: 33_100 + index,
+          path: "/media/tv/rollup-diagnostics-#{index}.mkv",
+          path_canonical: "/media/tv/rollup-diagnostics-#{index}.mkv",
+          size_bytes: 1.gigabyte
+        )
+        WatchStat.create!(plex_user: user, watchable: episode, play_count: 1)
+        ambiguous_episode_ids << episode.id
+      end
+
+      result = described_class.new(
+        scope: "tv_season",
+        plex_user_ids: [ user.id ],
+        include_blocked: true,
+        watched_match_mode: "all",
+        cursor: nil,
+        limit: nil
+      ).call
+
+      row = result.items.find { |item| item[:candidate_id] == "season:#{season.id}" }
+      expect(row.dig(:mapping_status, :code)).to eq("ambiguous_conflict")
+
+      diagnostics = row.fetch(:mapping_diagnostics)
+      expected_status_keys = %w[
+        verified_path
+        verified_external_ids
+        verified_tv_structure
+        provisional_title_year
+        external_source_not_managed
+        unresolved
+        ambiguous_conflict
+      ]
+      expect(diagnostics.fetch("status_counts").keys).to match_array(expected_status_keys)
+      expect(diagnostics.fetch("worst_status_episode_ids").keys).to match_array(expected_status_keys)
+      expect(diagnostics.fetch("id_cap_per_status")).to eq(5)
+      expect(diagnostics.fetch("rollup_reason")).to eq("all_episodes_single_status")
+      expected_capped_ids = ambiguous_episode_ids.sort.first(5)
+      expect(diagnostics.dig("worst_status_episode_ids", "ambiguous_conflict")).to eq(expected_capped_ids)
+    end
+
+    it "emits no_episode_media_files rollup reason for empty rollup inputs" do
+      integration = Integration.create!(
+        kind: "sonarr",
+        name: "Sonarr Empty Rollup",
+        base_url: "https://sonarr.empty-rollup.local",
+        api_key: "secret",
+        verify_ssl: true
+      )
+      series = Series.create!(integration: integration, sonarr_series_id: 24_001, title: "Empty Rollup Show")
+      season = Season.create!(series: series, season_number: 1)
+
+      result = described_class.new(
+        scope: "tv_season",
+        plex_user_ids: [],
+        include_blocked: true,
+        watched_match_mode: "none",
+        cursor: nil,
+        limit: nil
+      ).call
+
+      row = result.items.find { |item| item[:candidate_id] == "season:#{season.id}" }
+      expect(row.dig(:mapping_status, :code)).to eq("unresolved")
+      expect(row.dig(:mapping_status, :state)).to eq("unresolved")
+      expect(row.dig(:mapping_diagnostics, "total_episode_count")).to eq(0)
+      expect(row.dig(:mapping_diagnostics, "rollup_reason")).to eq("no_episode_media_files")
+      expect(row.dig(:mapping_diagnostics, "worst_status_code")).to eq("unresolved")
     end
 
     it "prefers ARR-added timestamps over record created_at for added-day reasons" do

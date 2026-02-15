@@ -72,12 +72,19 @@ Each row shows:
 - reason list
 - media file IDs
 
-### What "needs review" usually means
+### What source-aware mapping statuses usually mean
 
 Most often:
 - path mapping mismatch
 - conflicting external IDs
 - same path reported by multiple sources
+- external source paths outside managed roots
+
+Common statuses to watch:
+- `provisional_title_year`: provisional title/year linkage pending stronger recheck
+- `external_source_not_managed`: path is outside configured managed roots
+- `unresolved`: no strong mapping signal verified yet
+- `ambiguous_conflict`: strong signals conflict and require operator resolution
 
 ## 7) Understand protected paths
 
