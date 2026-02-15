@@ -1,6 +1,7 @@
 module Sync
   class TautulliLibraryMappingSync
-    ROW_BUDGET_PER_RUN = 50_000
+    SCHEDULED_DISCOVERY_ROW_BUDGET_PER_INTEGRATION = 50_000
+    SCHEDULED_METADATA_RECHECK_CALL_BUDGET_PER_INTEGRATION = 5_000
     ATTEMPT_ORDER = %w[path external_ids tv_structure title_year].freeze
     RECHECK_ELIGIBLE_STATUSES = %w[provisional_title_year unresolved].freeze
 
@@ -32,6 +33,8 @@ module Sync
     def call
       counts = {
         integrations: 0,
+        profile_bootstrap_integrations: 0,
+        profile_scheduled_integrations: 0,
         libraries_fetched: 0,
         rows_fetched: 0,
         rows_processed: 0,
@@ -90,6 +93,8 @@ module Sync
           "rows_mapped_by_external_ids=#{integration_counts[:rows_mapped_by_external_ids]} " \
           "rows_mapped_by_title_year=#{integration_counts[:rows_mapped_by_title_year]} " \
           "rows_ambiguous=#{integration_counts[:rows_ambiguous]} rows_unmapped=#{integration_counts[:rows_unmapped]} " \
+          "profile_bootstrap_integrations=#{integration_counts[:profile_bootstrap_integrations]} " \
+          "profile_scheduled_integrations=#{integration_counts[:profile_scheduled_integrations]} " \
           "watchables_updated=#{integration_counts[:watchables_updated]} " \
           "watchables_unchanged=#{integration_counts[:watchables_unchanged]} " \
           "state_updates=#{integration_counts[:state_updates]}"
@@ -106,6 +111,8 @@ module Sync
 
     def process_libraries(integration:, adapter:, libraries:)
       counts = {
+        profile_bootstrap_integrations: 0,
+        profile_scheduled_integrations: 0,
         rows_fetched: 0,
         rows_processed: 0,
         rows_invalid: 0,
@@ -140,32 +147,46 @@ module Sync
         watchables_unchanged: 0,
         state_updates: 0
       }
-      return counts if libraries.empty?
-
       @recheck_metadata_cache = {}
       @recheck_show_metadata_cache = {}
       @series_by_rating_key_cache = {}
       @series_by_external_id_cache = {}
       @episode_position_lookup_cache = {}
+
+      profile = mapping_run_profile_for(integration)
+      counts[profile_counter_key_for(profile)] += 1
+
       state = library_mapping_state_for(integration)
       library_states = state.fetch("libraries")
-      budget_remaining = ROW_BUDGET_PER_RUN
+      persisted_bootstrap_completed_at = integration.settings_json["library_mapping_bootstrap_completed_at"]
+      bootstrap_completed_at = persisted_bootstrap_completed_at
+      discovery_budget_remaining = if scheduled_profile?(profile)
+        SCHEDULED_DISCOVERY_ROW_BUDGET_PER_INTEGRATION
+      end
+      staged_rows = scheduled_profile?(profile) ? [] : nil
+      # Monotonic per integration pass across all fetched rows in page retrieval order.
+      discovery_sequence = 0
+      bootstrap_cycle_completed = bootstrap_profile?(profile)
       state_changed = false
 
       phase_progress&.add_total!(libraries.size)
       phase_progress&.advance!(libraries.size)
 
       libraries.each do |library|
-        break if budget_remaining <= 0
+        break if scheduled_profile?(profile) && discovery_budget_remaining <= 0
 
         library_id = library.fetch(:library_id).to_s
         library_state = normalized_library_state(library_states[library_id])
         start_offset = library_state.fetch("next_start")
+        library_cycle_completed = false
 
         loop do
-          break if budget_remaining <= 0
+          break if scheduled_profile?(profile) && discovery_budget_remaining <= 0
 
-          page_length = [ integration.tautulli_history_page_size, budget_remaining ].min
+          page_length = integration.tautulli_history_page_size
+          if scheduled_profile?(profile)
+            page_length = [ page_length, discovery_budget_remaining ].min
+          end
           break if page_length <= 0
 
           page = adapter.fetch_library_media_page(
@@ -182,18 +203,43 @@ module Sync
           counts[:rows_fetched] += fetched_rows
           counts[:rows_invalid] += page.fetch(:rows_skipped_invalid, 0).to_i
 
-          row_counts = process_rows(rows, integration:, adapter:)
-          row_counts.each do |key, value|
-            counts[key] += value
+          page_staged_rows = []
+          rows.each do |row|
+            staged_row = {
+              row: row,
+              discovery_sequence: discovery_sequence
+            }
+            if scheduled_profile?(profile)
+              staged_rows << staged_row
+            else
+              page_staged_rows << staged_row
+            end
+            discovery_sequence += 1
           end
           phase_progress&.advance!(rows.size)
 
-          budget_remaining -= fetched_rows
+          if bootstrap_profile?(profile)
+            row_counts = process_staged_rows(
+              staged_rows: page_staged_rows,
+              integration: integration,
+              adapter: adapter,
+              profile: profile
+            )
+            row_counts.each do |key, value|
+              counts[key] += value
+            end
+          end
+
+          if scheduled_profile?(profile)
+            discovery_budget_remaining -= fetched_rows
+          end
+
           if fetched_rows <= 0 || !page.fetch(:has_more)
             library_state["next_start"] = 0
             library_state["completed_cycle_count"] += 1
             library_state["last_completed_at"] = Time.current.iso8601
             state_changed = true
+            library_cycle_completed = true
             break
           end
 
@@ -206,13 +252,30 @@ module Sync
         end
 
         library_states[library_id] = library_state
+        bootstrap_cycle_completed &&= library_cycle_completed
+      end
+
+      if scheduled_profile?(profile)
+        row_counts = process_staged_rows(staged_rows:, integration:, adapter:, profile:)
+        row_counts.each do |key, value|
+          counts[key] += value
+        end
       end
 
       state["last_run_at"] = Time.current.iso8601
       state_changed = true
 
-      if state_changed
-        persist_library_mapping_state!(integration:, state:)
+      if bootstrap_profile?(profile) && bootstrap_cycle_completed
+        bootstrap_completed_at = Time.current.iso8601
+      end
+
+      marker_changed = persisted_bootstrap_completed_at != bootstrap_completed_at
+      if state_changed || marker_changed
+        persist_library_mapping_settings!(
+          integration: integration,
+          state: state,
+          bootstrap_completed_at: bootstrap_completed_at
+        )
         counts[:state_updates] += 1
       end
 
@@ -234,7 +297,7 @@ module Sync
     #
     # Strong-signal consistency check always runs after strict-order tentative selection.
     # It fails closed to ambiguous_conflict on strong-signal disagreement or type mismatch.
-    def process_rows(rows, integration:, adapter:)
+    def process_staged_rows(staged_rows:, integration:, adapter:, profile:)
       counts = {
         rows_processed: 0,
         rows_mapped_by_path: 0,
@@ -267,32 +330,54 @@ module Sync
         watchables_updated: 0,
         watchables_unchanged: 0
       }
-      return counts if rows.empty?
+      return counts if staged_rows.empty?
 
       canonical_mapper = Sync::CanonicalPathMapper.new(integration:)
       root_classifier = Paths::ManagedRootClassifier.new(
         managed_path_roots: AppSetting.db_value_for("managed_path_roots")
       )
+      rows = staged_rows.map { |entry| entry.fetch(:row) }
       @path_lookup = build_path_lookup(rows:, canonical_mapper:)
       @movie_match_index = build_movie_match_index(rows:)
       @episode_match_index = build_episode_match_index(rows:)
       @movie_title_year_match_index = build_movie_title_year_match_index(rows:)
 
-      rows.each do |row|
-        counts[:rows_processed] += 1
+      work_items = staged_rows.sort_by { |entry| entry.fetch(:discovery_sequence) }.map do |entry|
+        row = entry.fetch(:row)
         first_context = row_context_for(
           row: row,
           canonical_mapper: canonical_mapper,
           root_classifier: root_classifier
         )
         first_evaluation = evaluate_context(first_context, integration: integration)
+        {
+          row: row,
+          discovery_sequence: entry.fetch(:discovery_sequence),
+          first_context: first_context,
+          first_evaluation: first_evaluation
+        }
+      end
+
+      ordered_work_items = ordered_work_items_for(work_items:, profile:)
+      recheck_budget = {
+        limited: scheduled_profile?(profile),
+        remaining_calls: SCHEDULED_METADATA_RECHECK_CALL_BUDGET_PER_INTEGRATION
+      }
+
+      ordered_work_items.each do |work_item|
+        row = work_item.fetch(:row)
+        first_context = work_item.fetch(:first_context)
+        first_evaluation = work_item.fetch(:first_evaluation)
+
+        counts[:rows_processed] += 1
         outcome = recheck_outcome_for(
           row: row,
           first_evaluation: first_evaluation,
           canonical_mapper: canonical_mapper,
           root_classifier: root_classifier,
           adapter: adapter,
-          integration: integration
+          integration: integration,
+          recheck_budget: recheck_budget
         )
 
         increment_recheck_counters!(counts:, first_status: first_evaluation.fetch(:status_code), outcome:)
@@ -960,7 +1045,7 @@ module Sync
       nil
     end
 
-    def recheck_outcome_for(row:, first_evaluation:, canonical_mapper:, root_classifier:, adapter:, integration:)
+    def recheck_outcome_for(row:, first_evaluation:, canonical_mapper:, root_classifier:, adapter:, integration:, recheck_budget:)
       initial_status = first_evaluation.fetch(:status_code)
       return { state: RECHECK_OUTCOME_NOT_ELIGIBLE } unless RECHECK_ELIGIBLE_STATUSES.include?(initial_status)
 
@@ -970,7 +1055,8 @@ module Sync
           canonical_mapper: canonical_mapper,
           root_classifier: root_classifier,
           adapter: adapter,
-          integration: integration
+          integration: integration,
+          recheck_budget: recheck_budget
         )
       end
 
@@ -982,7 +1068,18 @@ module Sync
         }
       end
 
-      metadata_result = fetch_recheck_metadata_result(adapter:, rating_key:)
+      metadata_result = fetch_recheck_metadata_result(
+        adapter: adapter,
+        rating_key: rating_key,
+        recheck_budget: recheck_budget
+      )
+      if metadata_result.fetch(:budget_exhausted, false)
+        return {
+          state: RECHECK_OUTCOME_SKIPPED,
+          reason: "recheck_skipped_scheduled_recheck_budget",
+          metadata_call_issued: false
+        }
+      end
       metadata = metadata_result.fetch(:metadata)
       if metadata.blank?
         return {
@@ -1013,7 +1110,7 @@ module Sync
       }
     end
 
-    def tv_episode_recheck_outcome_for(row:, canonical_mapper:, root_classifier:, adapter:, integration:)
+    def tv_episode_recheck_outcome_for(row:, canonical_mapper:, root_classifier:, adapter:, integration:, recheck_budget:)
       # Row-level counter semantics:
       # - attempted: at least one metadata call issued for this row
       # - skipped: no metadata call issued for this row
@@ -1028,8 +1125,18 @@ module Sync
         show_metadata_result = fetch_recheck_show_metadata_result(
           adapter: adapter,
           integration_id: integration.id,
-          show_rating_key: show_rating_key
+          show_rating_key: show_rating_key,
+          recheck_budget: recheck_budget
         )
+        if show_metadata_result.fetch(:budget_exhausted, false)
+          return {
+            state: RECHECK_OUTCOME_SKIPPED,
+            reason: "recheck_skipped_scheduled_recheck_budget",
+            metadata_call_issued: false,
+            context: show_context,
+            evaluation: show_evaluation
+          }
+        end
         metadata_call_issued ||= show_metadata_result.fetch(:call_issued)
         show_metadata = show_metadata_result.fetch(:metadata)
 
@@ -1065,7 +1172,20 @@ module Sync
         }
       end
 
-      metadata_result = fetch_recheck_metadata_result(adapter:, rating_key:)
+      metadata_result = fetch_recheck_metadata_result(
+        adapter: adapter,
+        rating_key: rating_key,
+        recheck_budget: recheck_budget
+      )
+      if metadata_result.fetch(:budget_exhausted, false)
+        return {
+          state: RECHECK_OUTCOME_SKIPPED,
+          reason: "recheck_skipped_scheduled_recheck_budget",
+          metadata_call_issued: metadata_call_issued,
+          context: show_context,
+          evaluation: show_evaluation
+        }
+      end
       metadata_call_issued ||= metadata_result.fetch(:call_issued)
       metadata = metadata_result.fetch(:metadata)
 
@@ -1097,52 +1217,70 @@ module Sync
       }
     end
 
-    def fetch_recheck_metadata_result(adapter:, rating_key:)
+    def fetch_recheck_metadata_result(adapter:, rating_key:, recheck_budget:)
       cached = @recheck_metadata_cache[rating_key]
       unless cached.nil?
         return {
           metadata: cached == :unusable ? nil : cached,
-          call_issued: false
+          call_issued: false,
+          budget_exhausted: false
+        }
+      end
+
+      unless consume_recheck_budget_call!(recheck_budget)
+        return {
+          metadata: nil,
+          call_issued: false,
+          budget_exhausted: true
         }
       end
 
       metadata = adapter.fetch_metadata(rating_key: rating_key)
       if metadata_usable?(metadata)
         @recheck_metadata_cache[rating_key] = metadata
-        return { metadata: metadata, call_issued: true }
+        return { metadata: metadata, call_issued: true, budget_exhausted: false }
       end
 
       @recheck_metadata_cache[rating_key] = :unusable
-      { metadata: nil, call_issued: true }
+      { metadata: nil, call_issued: true, budget_exhausted: false }
     rescue Integrations::Error, Integrations::ContractMismatchError, StandardError
       @recheck_metadata_cache[rating_key] = :unusable
-      { metadata: nil, call_issued: true }
+      { metadata: nil, call_issued: true, budget_exhausted: false }
     end
 
-    def fetch_recheck_show_metadata_result(adapter:, integration_id:, show_rating_key:)
+    def fetch_recheck_show_metadata_result(adapter:, integration_id:, show_rating_key:, recheck_budget:)
       normalized_key = show_rating_key.to_s.strip.presence
-      return { metadata: nil, call_issued: false } if normalized_key.blank?
+      return { metadata: nil, call_issued: false, budget_exhausted: false } if normalized_key.blank?
 
       cache_key = [ integration_id, normalized_key ]
       cached = @recheck_show_metadata_cache[cache_key]
       unless cached.nil?
         return {
           metadata: cached == :unusable ? nil : cached,
-          call_issued: false
+          call_issued: false,
+          budget_exhausted: false
+        }
+      end
+
+      unless consume_recheck_budget_call!(recheck_budget)
+        return {
+          metadata: nil,
+          call_issued: false,
+          budget_exhausted: true
         }
       end
 
       metadata = adapter.fetch_metadata(rating_key: normalized_key)
       if metadata_usable_for_show?(metadata)
         @recheck_show_metadata_cache[cache_key] = metadata
-        return { metadata: metadata, call_issued: true }
+        return { metadata: metadata, call_issued: true, budget_exhausted: false }
       end
 
       @recheck_show_metadata_cache[cache_key] = :unusable
-      { metadata: nil, call_issued: true }
+      { metadata: nil, call_issued: true, budget_exhausted: false }
     rescue Integrations::Error, Integrations::ContractMismatchError, StandardError
       @recheck_show_metadata_cache[cache_key] = :unusable
-      { metadata: nil, call_issued: true }
+      { metadata: nil, call_issued: true, budget_exhausted: false }
     end
 
     def metadata_usable?(metadata)
@@ -1357,9 +1495,64 @@ module Sync
       state
     end
 
-    def persist_library_mapping_state!(integration:, state:)
+    def mapping_run_profile_for(integration)
+      marker = integration.settings_json["library_mapping_bootstrap_completed_at"].to_s.strip.presence
+      marker.present? ? :scheduled : :bootstrap
+    end
+
+    def bootstrap_profile?(profile)
+      profile == :bootstrap
+    end
+
+    def scheduled_profile?(profile)
+      profile == :scheduled
+    end
+
+    def profile_counter_key_for(profile)
+      bootstrap_profile?(profile) ? :profile_bootstrap_integrations : :profile_scheduled_integrations
+    end
+
+    def ordered_work_items_for(work_items:, profile:)
+      ordered = work_items.sort_by { |item| item.fetch(:discovery_sequence) }
+      return ordered unless scheduled_profile?(profile)
+
+      ordered.sort_by do |item|
+        first_status = item.dig(:first_evaluation, :status_code).to_s
+        [
+          scheduled_priority_rank_for(first_status),
+          item.fetch(:discovery_sequence)
+        ]
+      end
+    end
+
+    def scheduled_priority_rank_for(status_code)
+      case status_code
+      when "provisional_title_year"
+        0
+      when "unresolved"
+        1
+      else
+        2
+      end
+    end
+
+    def consume_recheck_budget_call!(recheck_budget)
+      return true unless recheck_budget.is_a?(Hash)
+      return true unless recheck_budget.fetch(:limited, false)
+      return false if recheck_budget.fetch(:remaining_calls).to_i <= 0
+
+      recheck_budget[:remaining_calls] = recheck_budget.fetch(:remaining_calls).to_i - 1
+      true
+    end
+
+    def persist_library_mapping_settings!(integration:, state:, bootstrap_completed_at:)
       settings = integration.settings_json.deep_dup
       settings["library_mapping_state"] = state
+      if bootstrap_completed_at.to_s.strip.present?
+        settings["library_mapping_bootstrap_completed_at"] = bootstrap_completed_at
+      else
+        settings.delete("library_mapping_bootstrap_completed_at")
+      end
       integration.update!(settings_json: settings)
     end
 
@@ -1474,8 +1667,12 @@ module Sync
           counts[:unresolved_rechecked] += 1
         end
       when RECHECK_OUTCOME_SKIPPED
-        counts[:metadata_recheck_skipped] += 1
-        if first_status == "unresolved"
+        if outcome.fetch(:metadata_call_issued, false)
+          counts[:metadata_recheck_attempted] += 1
+        else
+          counts[:metadata_recheck_skipped] += 1
+        end
+        if first_status == "unresolved" && !outcome.fetch(:metadata_call_issued, false)
           counts[:unresolved_recheck_skipped] += 1
         end
       when RECHECK_OUTCOME_FAILED

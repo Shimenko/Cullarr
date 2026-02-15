@@ -192,6 +192,13 @@ Accepted response:
 
 If another run is active, expect conflict-style behavior such as `sync_already_running` or queued-next behavior.
 
+For completed runs (`GET /api/v1/sync-runs` or `GET /api/v1/sync-runs/:id`), `sync_run.phase_counts`
+can include additive mapping-phase profile counters under
+`phase_counts.tautulli_library_mapping`:
+
+- `profile_bootstrap_integrations`
+- `profile_scheduled_integrations`
+
 ## `GET /api/v1/image-proxy`
 
 Example query:

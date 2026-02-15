@@ -64,13 +64,15 @@ module Api
 
         prior_history_state = @integration.settings_json["history_sync_state"]
         prior_library_mapping_state = @integration.settings_json["library_mapping_state"]
-        if prior_history_state.blank? && prior_library_mapping_state.blank?
+        prior_library_mapping_bootstrap_completed_at = @integration.settings_json["library_mapping_bootstrap_completed_at"]
+        if prior_history_state.blank? && prior_library_mapping_state.blank? && prior_library_mapping_bootstrap_completed_at.blank?
           return render json: { integration: @integration.as_api_json, reset: false, reason: "already_clear" }
         end
 
         settings = @integration.settings_json.deep_dup
         settings.delete("history_sync_state")
         settings.delete("library_mapping_state")
+        settings.delete("library_mapping_bootstrap_completed_at")
         @integration.update!(settings_json: settings)
         record_integration_event("cullarr.integration.updated", @integration, action: "history_state_reset")
 

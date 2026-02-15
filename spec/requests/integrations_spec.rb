@@ -94,16 +94,62 @@ RSpec.describe "Integrations", type: :request do
                 "next_start" => 100
               }
             }
-          }
+          },
+          "library_mapping_bootstrap_completed_at" => "2026-02-14T12:00:00Z"
         }
       )
 
       post "/integrations/#{integration.id}/reset_history_state"
 
       expect(response).to redirect_to("/settings")
-      expect(integration.reload.settings_json).not_to have_key("history_sync_state")
-      expect(integration.reload.settings_json).not_to have_key("library_mapping_state")
-      expect(AuditEvent.order(:created_at).last.payload_json["action"]).to eq("history_state_reset")
+      expect(integration.reload.settings_json.keys).not_to include(
+        "history_sync_state",
+        "library_mapping_state",
+        "library_mapping_bootstrap_completed_at"
+      )
+      payload = AuditEvent.order(:created_at).last.payload_json
+      expect(payload["action"]).to eq("history_state_reset")
+      expect(payload["prior_library_mapping_bootstrap_completed_at"]).to eq("2026-02-14T12:00:00Z")
+    end
+
+    it "resets marker-only state for tautulli integrations" do
+      sign_in_operator!
+      reauthenticate!
+      integration = Integration.create!(
+        kind: "tautulli",
+        name: "Tautulli Marker Only",
+        base_url: "https://tautulli.marker-only.local",
+        api_key: "secret",
+        verify_ssl: true,
+        settings_json: {
+          "library_mapping_bootstrap_completed_at" => "2026-02-14T13:00:00Z"
+        }
+      )
+
+      post "/integrations/#{integration.id}/reset_history_state"
+
+      expect(response).to redirect_to("/settings")
+      expect(integration.reload.settings_json).not_to have_key("library_mapping_bootstrap_completed_at")
+    end
+
+    it "returns already-clear notice when history, mapping state, and marker are all absent" do
+      sign_in_operator!
+      reauthenticate!
+      integration = Integration.create!(
+        kind: "tautulli",
+        name: "Tautulli Already Clear",
+        base_url: "https://tautulli.already-clear.local",
+        api_key: "secret",
+        verify_ssl: true,
+        settings_json: {}
+      )
+      prior_settings = integration.settings_json.deep_dup
+
+      post "/integrations/#{integration.id}/reset_history_state"
+
+      expect(response).to redirect_to("/settings")
+      expect(flash[:notice]).to eq("History sync state is already clear.")
+      expect(integration.reload.settings_json).to eq(prior_settings)
     end
 
     it "rejects reset for non-tautulli integrations" do

@@ -29,6 +29,14 @@ Run state is stored in `sync_runs` (status, phase, counts, errors).
 - runs strict matcher order: path -> external IDs -> TV structure -> title/year provisional
 - runs a strong-signal consistency check after tentative selection and fails closed on conflicts
 - rechecks provisional rows (and unresolved rows) via metadata lookup when eligible
+- chooses mapping run profile by integration marker state:
+  - bootstrap profile when `integrations.settings_json["library_mapping_bootstrap_completed_at"]` is blank
+  - scheduled profile when marker is present
+- bootstrap profile is effectively unbounded and sets the marker after successful baseline completion
+- scheduled profile is bounded (per integration) and processes rechecks in priority order:
+  1. provisional first-pass rows
+  2. unresolved first-pass rows
+  3. new/non-recheck discovery rows
 - keeps deterministic recheck outcomes:
   - attempted (metadata call issued)
   - skipped (no call issued)

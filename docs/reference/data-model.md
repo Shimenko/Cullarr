@@ -32,6 +32,10 @@ High-level flow:
 | `path_exclusions` | Paths that should never be deleted through Cullarr.              | `path_prefix`, `enabled`                                |
 | `saved_views`     | Saved candidate filter presets.                                  | `name`, `scope`, `filters_json`                         |
 
+`integrations.settings_json` also carries Tautulli library-mapping lifecycle state:
+- `library_mapping_state`: mapping traversal cursors and cycle metadata
+- `library_mapping_bootstrap_completed_at`: set after successful bootstrap baseline completion; cleared by integration history-state reset
+
 ## Media inventory tables
 
 | Table         | Why it exists                         | Important fields                                                                  |

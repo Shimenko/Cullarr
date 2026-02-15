@@ -164,6 +164,19 @@ RSpec.describe "Api::V1::SyncRuns", type: :request do
       expect(response.parsed_body.dig("sync_run", "status")).to eq("queued")
     end
 
+    it "includes additive mapping profile counters in populated mapping phase counts" do
+      sign_in_operator!
+      sync_run = create_completed_mapping_profile_sync_run!
+
+      get "/api/v1/sync-runs/#{sync_run.id}", as: :json
+
+      mapping_counts = response.parsed_body.dig("sync_run", "phase_counts", "tautulli_library_mapping")
+      expect(mapping_counts).to include(
+        "profile_bootstrap_integrations" => 1,
+        "profile_scheduled_integrations" => 2
+      )
+    end
+
     it "returns not_found for missing sync runs" do
       sign_in_operator!
 
@@ -180,6 +193,20 @@ RSpec.describe "Api::V1::SyncRuns", type: :request do
       SyncRun.create!(status: "success", trigger: "scheduler"),
       SyncRun.create!(status: "queued", trigger: "manual")
     ]
+  end
+
+  def create_completed_mapping_profile_sync_run!
+    SyncRun.create!(
+      status: "success",
+      trigger: "manual",
+      phase_counts_json: {
+        "tautulli_library_mapping" => {
+          "rows_processed" => 42,
+          "profile_bootstrap_integrations" => 1,
+          "profile_scheduled_integrations" => 2
+        }
+      }
+    )
   end
 
   def queued_next_event_payload_for(sync_run_id)

@@ -1719,5 +1719,500 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
     expect(Episode).to have_received(:where).with(tvdb_id: [ 660_001 ]).once
     expect(result).to include(rows_mapped_by_external_ids: 1, rows_ambiguous: 4)
   end
+
+  it "tracks bootstrap and scheduled profile counters and marks empty-library bootstrap complete" do
+    tautulli_bootstrap = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Bootstrap Counter",
+      base_url: "https://tautulli.bootstrap-counter.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    tautulli_scheduled = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Scheduled Counter",
+      base_url: "https://tautulli.scheduled-counter.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: {
+        "library_mapping_bootstrap_completed_at" => "2026-02-14T10:00:00Z"
+      }
+    )
+
+    health_check_bootstrap = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    health_check_scheduled = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli_bootstrap, raise_on_unsupported: true).and_return(health_check_bootstrap)
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli_scheduled, raise_on_unsupported: true).and_return(health_check_scheduled)
+
+    adapter_bootstrap = instance_double(Integrations::TautulliAdapter, fetch_libraries: [])
+    adapter_scheduled = instance_double(Integrations::TautulliAdapter, fetch_libraries: [])
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli_bootstrap).and_return(adapter_bootstrap)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli_scheduled).and_return(adapter_scheduled)
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-profile-counters").call
+
+    expect(result).to include(
+      profile_bootstrap_integrations: 1,
+      profile_scheduled_integrations: 1
+    )
+    expect(tautulli_bootstrap.reload.settings_json["library_mapping_bootstrap_completed_at"]).to be_present
+  end
+
+  it "uses scheduled profile when marker is present regardless of scheduler trigger" do
+    scheduler_run = SyncRun.create!(status: "running", trigger: "scheduler")
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Trigger Independence",
+      base_url: "https://tautulli.trigger-independence.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: {
+        "library_mapping_bootstrap_completed_at" => "2026-02-14T09:00:00Z"
+      }
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter, fetch_libraries: [])
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+
+    result = described_class.new(sync_run: scheduler_run, correlation_id: "corr-library-trigger-independence").call
+
+    expect(result).to include(profile_bootstrap_integrations: 0, profile_scheduled_integrations: 1)
+  end
+
+  it "uses per-integration recheck budgets for scheduled runs" do
+    stub_const("#{described_class}::SCHEDULED_METADATA_RECHECK_CALL_BUDGET_PER_INTEGRATION", 1)
+
+    tautulli_one = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Budget Scope One",
+      base_url: "https://tautulli.budget-scope-one.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: {
+        "library_mapping_bootstrap_completed_at" => "2026-02-14T08:00:00Z"
+      }
+    )
+    tautulli_two = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Budget Scope Two",
+      base_url: "https://tautulli.budget-scope-two.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: {
+        "library_mapping_bootstrap_completed_at" => "2026-02-14T08:00:00Z"
+      }
+    )
+    radarr = Integration.create!(
+      kind: "radarr",
+      name: "Radarr Budget Scope",
+      base_url: "https://radarr.budget-scope.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    Movie.create!(integration: radarr, radarr_movie_id: 88_101, title: "Budget Scope Movie One", year: 2024, metadata_json: {})
+    Movie.create!(integration: radarr, radarr_movie_id: 88_102, title: "Budget Scope Movie Two", year: 2024, metadata_json: {})
+
+    health_check_one = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    health_check_two = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli_one, raise_on_unsupported: true).and_return(health_check_one)
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli_two, raise_on_unsupported: true).and_return(health_check_two)
+
+    adapter_one = instance_double(Integrations::TautulliAdapter)
+    adapter_two = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli_one).and_return(adapter_one)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli_two).and_return(adapter_two)
+
+    allow(adapter_one).to receive(:fetch_libraries).and_return([ { library_id: 81, title: "Movies", section_type: "movie" } ])
+    allow(adapter_two).to receive(:fetch_libraries).and_return([ { library_id: 82, title: "Movies", section_type: "movie" } ])
+    allow(adapter_one).to receive(:fetch_library_media_page).with(library_id: 81, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "movie",
+            title: "Budget Scope Movie One",
+            year: 2024,
+            plex_rating_key: "plex-budget-scope-1",
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+    allow(adapter_two).to receive(:fetch_library_media_page).with(library_id: 82, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "movie",
+            title: "Budget Scope Movie Two",
+            year: 2024,
+            plex_rating_key: "plex-budget-scope-2",
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+    allow(adapter_one).to receive(:fetch_metadata).with(rating_key: "plex-budget-scope-1").and_return(nil)
+    allow(adapter_two).to receive(:fetch_metadata).with(rating_key: "plex-budget-scope-2").and_return(nil)
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-budget-scope").call
+
+    expect(result).to include(profile_scheduled_integrations: 2, metadata_recheck_attempted: 2)
+  end
+
+  it "emits deterministic scheduled-budget skip reason when recheck call budget is exhausted" do
+    stub_const("#{described_class}::SCHEDULED_METADATA_RECHECK_CALL_BUDGET_PER_INTEGRATION", 1)
+
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Scheduled Budget Skip",
+      base_url: "https://tautulli.scheduled-budget-skip.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: {
+        "library_mapping_bootstrap_completed_at" => "2026-02-14T11:00:00Z"
+      }
+    )
+    radarr = Integration.create!(
+      kind: "radarr",
+      name: "Radarr Scheduled Budget Skip",
+      base_url: "https://radarr.scheduled-budget-skip.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    Movie.create!(integration: radarr, radarr_movie_id: 89_101, title: "Budget Skip Movie One", year: 2024, metadata_json: {})
+    second_movie = Movie.create!(
+      integration: radarr,
+      radarr_movie_id: 89_102,
+      title: "Budget Skip Movie Two",
+      year: 2024,
+      metadata_json: {}
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 83, title: "Movies", section_type: "movie" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 83, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "movie",
+            title: "Budget Skip Movie One",
+            year: 2024,
+            plex_rating_key: "plex-budget-skip-1",
+            external_ids: {}
+          },
+          {
+            media_type: "movie",
+            title: "Budget Skip Movie Two",
+            year: 2024,
+            plex_rating_key: "plex-budget-skip-2",
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 2,
+        rows_skipped_invalid: 0,
+        records_total: 2,
+        has_more: false,
+        next_start: 2
+      }
+    )
+    allow(adapter).to receive(:fetch_metadata).with(rating_key: "plex-budget-skip-1").and_return(nil)
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-scheduled-budget-skip").call
+
+    second_movie.reload
+    expect(second_movie.mapping_diagnostics_json.dig("recheck", "reason")).to eq("recheck_skipped_scheduled_recheck_budget")
+    expect(result).to include(
+      recheck_eligible_rows: 2,
+      metadata_recheck_attempted: 1,
+      metadata_recheck_skipped: 1,
+      metadata_recheck_failed: 1
+    )
+    expect(result[:metadata_recheck_attempted] + result[:metadata_recheck_skipped]).to eq(result[:recheck_eligible_rows])
+    expect(result[:metadata_recheck_failed]).to be <= result[:metadata_recheck_attempted]
+  end
+
+  it "orders scheduled rechecks by current-run first-pass status and discovery sequence" do
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Scheduled Ordering",
+      base_url: "https://tautulli.scheduled-ordering.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: {
+        "library_mapping_bootstrap_completed_at" => "2026-02-14T11:30:00Z"
+      }
+    )
+    radarr = Integration.create!(
+      kind: "radarr",
+      name: "Radarr Scheduled Ordering",
+      base_url: "https://radarr.scheduled-ordering.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    Movie.create!(integration: radarr, radarr_movie_id: 90_101, title: "Priority Provisional A", year: 2024, metadata_json: {})
+    Movie.create!(integration: radarr, radarr_movie_id: 90_102, title: "Priority Provisional B", year: 2024, metadata_json: {})
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 84, title: "Movies", section_type: "movie" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 84, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "movie",
+            title: "Scheduled Unresolved One",
+            year: 2024,
+            plex_rating_key: "plex-order-unresolved-1",
+            external_ids: {}
+          },
+          {
+            media_type: "movie",
+            title: "Priority Provisional A",
+            year: 2024,
+            plex_rating_key: "plex-order-provisional-1",
+            external_ids: {}
+          },
+          {
+            media_type: "movie",
+            title: "Scheduled Unresolved Two",
+            year: 2024,
+            plex_rating_key: "plex-order-unresolved-2",
+            external_ids: {}
+          },
+          {
+            media_type: "movie",
+            title: "Priority Provisional B",
+            year: 2024,
+            plex_rating_key: "plex-order-provisional-2",
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 4,
+        rows_skipped_invalid: 0,
+        records_total: 4,
+        has_more: false,
+        next_start: 4
+      }
+    )
+    metadata_requests = []
+    allow(adapter).to receive(:fetch_metadata) do |rating_key:|
+      metadata_requests << rating_key
+      nil
+    end
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-scheduled-ordering").call
+
+    expect(metadata_requests).to eq(
+      [
+        "plex-order-provisional-1",
+        "plex-order-provisional-2",
+        "plex-order-unresolved-1",
+        "plex-order-unresolved-2"
+      ]
+    )
+    expect(result).to include(recheck_eligible_rows: 4, metadata_recheck_attempted: 4)
+  end
+
+  it "enforces scheduled discovery row budget per integration" do
+    stub_const("#{described_class}::SCHEDULED_DISCOVERY_ROW_BUDGET_PER_INTEGRATION", 2)
+
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Discovery Budget",
+      base_url: "https://tautulli.discovery-budget.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: {
+        "library_mapping_bootstrap_completed_at" => "2026-02-14T11:45:00Z"
+      }
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 85, title: "Movies", section_type: "movie" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 85, start: 0, length: 2).and_return(
+      {
+        rows: [
+          {
+            media_type: "movie",
+            title: "Budget Discovery One",
+            year: 2024,
+            plex_rating_key: nil,
+            external_ids: {}
+          },
+          {
+            media_type: "movie",
+            title: "Budget Discovery Two",
+            year: 2024,
+            plex_rating_key: nil,
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 2,
+        rows_skipped_invalid: 0,
+        records_total: 3,
+        has_more: true,
+        next_start: 2
+      }
+    )
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-discovery-budget").call
+
+    expect(adapter).to have_received(:fetch_library_media_page).with(library_id: 85, start: 0, length: 2).once
+    expect(result).to include(rows_fetched: 2, rows_processed: 2)
+    expect(tautulli.reload.settings_json.dig("library_mapping_state", "libraries", "85", "next_start")).to eq(2)
+  end
+
+  it "does not set bootstrap marker when traversal fails before baseline completion" do
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Bootstrap Failure",
+      base_url: "https://tautulli.bootstrap-failure.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 86, title: "Movies", section_type: "movie" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 86, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "movie",
+            title: "Bootstrap Partial",
+            year: 2024,
+            plex_rating_key: nil,
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 2,
+        has_more: true,
+        next_start: 1
+      }
+    )
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 86, start: 1, length: 500).and_raise(StandardError, "page read failed")
+
+    expect do
+      described_class.new(sync_run:, correlation_id: "corr-library-bootstrap-failure").call
+    end.to raise_error(StandardError, "page read failed")
+
+    expect(tautulli.reload.settings_json).not_to have_key("library_mapping_bootstrap_completed_at")
+  end
+
+  it "does not count tv fallback budget exhaustion as metadata recheck failure when show lookup already issued a call" do
+    stub_const("#{described_class}::SCHEDULED_METADATA_RECHECK_CALL_BUDGET_PER_INTEGRATION", 1)
+
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli TV Budget Semantics",
+      base_url: "https://tautulli.tv-budget-semantics.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: {
+        "library_mapping_bootstrap_completed_at" => "2026-02-14T12:00:00Z"
+      }
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 87, title: "TV", section_type: "show" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 87, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "episode",
+            title: "TV Budget Row",
+            year: 2024,
+            plex_rating_key: "plex-tv-budget-episode",
+            plex_grandparent_rating_key: "plex-tv-budget-show",
+            season_number: 1,
+            episode_number: 2,
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+    allow(adapter).to receive(:fetch_metadata).with(rating_key: "plex-tv-budget-show").and_return(
+      {
+        file_path: nil,
+        external_ids: {},
+        provenance: { endpoint: "get_metadata" }
+      }
+    )
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-tv-budget-semantics").call
+
+    expect(adapter).to have_received(:fetch_metadata).with(rating_key: "plex-tv-budget-show").once
+    expect(adapter).not_to have_received(:fetch_metadata).with(rating_key: "plex-tv-budget-episode")
+    expect(result).to include(
+      recheck_eligible_rows: 1,
+      metadata_recheck_attempted: 1,
+      metadata_recheck_skipped: 0,
+      metadata_recheck_failed: 0,
+      unresolved_recheck_failed: 0,
+      unresolved_recheck_skipped: 0
+    )
+    expect(result[:metadata_recheck_attempted] + result[:metadata_recheck_skipped]).to eq(result[:recheck_eligible_rows])
+    expect(result[:metadata_recheck_failed]).to be <= result[:metadata_recheck_attempted]
+  end
+
+  it "persists marker and library mapping state in a single integration settings write" do
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Atomic Settings Write",
+      base_url: "https://tautulli.atomic-settings.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter, fetch_libraries: [])
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    tautulli_scope = instance_double(ActiveRecord::Relation)
+    allow(tautulli_scope).to receive(:find_each).and_yield(tautulli)
+    allow(Integration).to receive(:tautulli).and_return(tautulli_scope)
+
+    settings_payloads = []
+    allow(tautulli).to receive(:update!).and_wrap_original do |original, *args|
+      attrs = args.first
+      settings_payloads << attrs[:settings_json] if attrs.is_a?(Hash) && attrs.key?(:settings_json)
+      original.call(*args)
+    end
+
+    described_class.new(sync_run:, correlation_id: "corr-library-atomic-settings-write").call
+
+    expect(settings_payloads.size).to eq(1)
+    expect(settings_payloads.first).to include("library_mapping_state", "library_mapping_bootstrap_completed_at")
+  end
 end
 # rubocop:enable RSpec/ExampleLength, RSpec/MultipleExpectations, RSpec/ReceiveMessages
