@@ -412,7 +412,16 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
       metadata_recheck_attempted: 1,
       metadata_recheck_failed: 0,
       metadata_recheck_skipped: 0,
-      recheck_eligible_rows: 1
+      recheck_eligible_rows: 1,
+      enrichment_watchable_get_metadata_attempted: 1,
+      enrichment_watchable_get_metadata_skipped: 0,
+      enrichment_watchable_get_metadata_failed: 0,
+      enrichment_show_get_metadata_attempted: 0,
+      enrichment_show_get_metadata_skipped: 0,
+      enrichment_show_get_metadata_failed: 0,
+      enrichment_episode_fallback_get_metadata_attempted: 0,
+      enrichment_episode_fallback_get_metadata_skipped: 0,
+      enrichment_episode_fallback_get_metadata_failed: 0
     )
     expect(result[:metadata_recheck_attempted] + result[:metadata_recheck_skipped]).to eq(result[:recheck_eligible_rows])
     expect(result[:metadata_recheck_failed]).to be <= result[:metadata_recheck_attempted]
@@ -930,7 +939,16 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
       metadata_recheck_failed: 0,
       unresolved_rechecked: 2,
       status_verified_tv_structure: 2,
-      rows_unmapped: 0
+      rows_unmapped: 0,
+      enrichment_watchable_get_metadata_attempted: 0,
+      enrichment_watchable_get_metadata_skipped: 0,
+      enrichment_watchable_get_metadata_failed: 0,
+      enrichment_show_get_metadata_attempted: 1,
+      enrichment_show_get_metadata_skipped: 1,
+      enrichment_show_get_metadata_failed: 0,
+      enrichment_episode_fallback_get_metadata_attempted: 0,
+      enrichment_episode_fallback_get_metadata_skipped: 0,
+      enrichment_episode_fallback_get_metadata_failed: 0
     )
     expect(result[:metadata_recheck_attempted] + result[:metadata_recheck_skipped]).to eq(result[:recheck_eligible_rows])
     expect(result[:metadata_recheck_failed]).to be <= result[:metadata_recheck_attempted]
@@ -1020,10 +1038,88 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
       metadata_recheck_attempted: 1,
       metadata_recheck_failed: 1,
       metadata_recheck_skipped: 0,
-      unresolved_recheck_failed: 1
+      unresolved_recheck_failed: 1,
+      enrichment_watchable_get_metadata_attempted: 0,
+      enrichment_watchable_get_metadata_skipped: 0,
+      enrichment_watchable_get_metadata_failed: 0,
+      enrichment_show_get_metadata_attempted: 1,
+      enrichment_show_get_metadata_skipped: 0,
+      enrichment_show_get_metadata_failed: 0,
+      enrichment_episode_fallback_get_metadata_attempted: 1,
+      enrichment_episode_fallback_get_metadata_skipped: 0,
+      enrichment_episode_fallback_get_metadata_failed: 1
     )
     expect(result[:metadata_recheck_attempted] + result[:metadata_recheck_skipped]).to eq(result[:recheck_eligible_rows])
     expect(result[:metadata_recheck_failed]).to be <= result[:metadata_recheck_attempted]
+  end
+
+  it "does not emit show-stage counters when show recheck stage is not entered" do
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Missing Show Key",
+      base_url: "https://tautulli.missing-show-key.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    sonarr = Integration.create!(
+      kind: "sonarr",
+      name: "Sonarr Missing Show Key",
+      base_url: "https://sonarr.missing-show-key.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    series = Series.create!(integration: sonarr, sonarr_series_id: 92_100, title: "Missing Show Key")
+    season = Season.create!(series:, season_number: 1)
+    Episode.create!(
+      integration: sonarr,
+      season: season,
+      sonarr_episode_id: 92_201,
+      episode_number: 9,
+      metadata_json: {}
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 71, title: "TV", section_type: "show" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 71, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "episode",
+            season_number: 1,
+            episode_number: 9,
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+    allow(adapter).to receive(:fetch_metadata).and_return(nil)
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-missing-show-key").call
+
+    expect(adapter).not_to have_received(:fetch_metadata)
+    expect(result).to include(
+      recheck_eligible_rows: 1,
+      metadata_recheck_attempted: 0,
+      metadata_recheck_skipped: 1,
+      metadata_recheck_failed: 0,
+      enrichment_watchable_get_metadata_attempted: 0,
+      enrichment_watchable_get_metadata_skipped: 0,
+      enrichment_watchable_get_metadata_failed: 0,
+      enrichment_show_get_metadata_attempted: 0,
+      enrichment_show_get_metadata_skipped: 0,
+      enrichment_show_get_metadata_failed: 0,
+      enrichment_episode_fallback_get_metadata_attempted: 0,
+      enrichment_episode_fallback_get_metadata_skipped: 1,
+      enrichment_episode_fallback_get_metadata_failed: 0
+    )
   end
 
   it "fails closed with strong_signal_disagreement when path and tv structure resolve different episodes" do
@@ -1575,7 +1671,16 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
       recheck_eligible_rows: 2,
       metadata_recheck_attempted: 1,
       metadata_recheck_skipped: 1,
-      metadata_recheck_failed: 0
+      metadata_recheck_failed: 0,
+      enrichment_watchable_get_metadata_attempted: 1,
+      enrichment_watchable_get_metadata_skipped: 1,
+      enrichment_watchable_get_metadata_failed: 0,
+      enrichment_show_get_metadata_attempted: 0,
+      enrichment_show_get_metadata_skipped: 0,
+      enrichment_show_get_metadata_failed: 0,
+      enrichment_episode_fallback_get_metadata_attempted: 0,
+      enrichment_episode_fallback_get_metadata_skipped: 0,
+      enrichment_episode_fallback_get_metadata_failed: 0
     )
   end
 
@@ -1939,7 +2044,16 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
       recheck_eligible_rows: 2,
       metadata_recheck_attempted: 1,
       metadata_recheck_skipped: 1,
-      metadata_recheck_failed: 1
+      metadata_recheck_failed: 1,
+      enrichment_watchable_get_metadata_attempted: 1,
+      enrichment_watchable_get_metadata_skipped: 1,
+      enrichment_watchable_get_metadata_failed: 1,
+      enrichment_show_get_metadata_attempted: 0,
+      enrichment_show_get_metadata_skipped: 0,
+      enrichment_show_get_metadata_failed: 0,
+      enrichment_episode_fallback_get_metadata_attempted: 0,
+      enrichment_episode_fallback_get_metadata_skipped: 0,
+      enrichment_episode_fallback_get_metadata_failed: 0
     )
     expect(result[:metadata_recheck_attempted] + result[:metadata_recheck_skipped]).to eq(result[:recheck_eligible_rows])
     expect(result[:metadata_recheck_failed]).to be <= result[:metadata_recheck_attempted]

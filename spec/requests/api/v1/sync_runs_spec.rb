@@ -150,6 +150,16 @@ RSpec.describe "Api::V1::SyncRuns", type: :request do
       expect(response.parsed_body.dig("error", "code")).to eq("validation_failed")
       expect(response.parsed_body.dig("error", "details", "fields", "cursor")).to eq([ "must be a positive integer" ])
     end
+
+    it "includes additive enrichment observability counters in mapping phase counts" do
+      sign_in_operator!
+      create_completed_mapping_profile_sync_run!
+
+      get "/api/v1/sync-runs", as: :json
+
+      mapping_counts = response.parsed_body.dig("sync_runs", 0, "phase_counts", "tautulli_library_mapping")
+      expect(mapping_counts).to include(expected_mapping_enrichment_counter_payload)
+    end
   end
 
   describe "GET /api/v1/sync-runs/:id" do
@@ -175,6 +185,7 @@ RSpec.describe "Api::V1::SyncRuns", type: :request do
         "profile_bootstrap_integrations" => 1,
         "profile_scheduled_integrations" => 2
       )
+      expect(mapping_counts).to include(expected_mapping_enrichment_counter_payload)
     end
 
     it "returns not_found for missing sync runs" do
@@ -204,9 +215,23 @@ RSpec.describe "Api::V1::SyncRuns", type: :request do
           "rows_processed" => 42,
           "profile_bootstrap_integrations" => 1,
           "profile_scheduled_integrations" => 2
-        }
+        }.merge(expected_mapping_enrichment_counter_payload)
       }
     )
+  end
+
+  def expected_mapping_enrichment_counter_payload
+    {
+      "enrichment_watchable_get_metadata_attempted" => 3,
+      "enrichment_watchable_get_metadata_skipped" => 2,
+      "enrichment_watchable_get_metadata_failed" => 1,
+      "enrichment_show_get_metadata_attempted" => 4,
+      "enrichment_show_get_metadata_skipped" => 1,
+      "enrichment_show_get_metadata_failed" => 2,
+      "enrichment_episode_fallback_get_metadata_attempted" => 5,
+      "enrichment_episode_fallback_get_metadata_skipped" => 2,
+      "enrichment_episode_fallback_get_metadata_failed" => 1
+    }
   end
 
   def queued_next_event_payload_for(sync_run_id)

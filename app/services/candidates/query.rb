@@ -556,8 +556,6 @@ module Candidates
       risk_flags = []
       risk_flags << "multiple_versions" if media_files.size > 1
       risk_flags << "no_plex_mapping" if movie.plex_rating_key.blank?
-      risk_flags << "external_id_mismatch" if flag_enabled?(movie.metadata_json, "external_id_mismatch")
-      risk_flags << "low_confidence_mapping" if low_confidence_mapping_for?(movie)
 
       blocker_flags = []
       blocker_flags << "path_excluded" if path_excluded?(media_files)
@@ -734,8 +732,6 @@ module Candidates
       risk_flags = []
       risk_flags << "multiple_versions" if media_files.size > 1
       risk_flags << "no_plex_mapping" if episode.plex_rating_key.blank?
-      risk_flags << "external_id_mismatch" if flag_enabled?(episode.metadata_json, "external_id_mismatch")
-      risk_flags << "low_confidence_mapping" if low_confidence_mapping_for?(episode)
 
       blocker_flags = []
       blocker_flags << "path_excluded" if path_excluded?(media_files)
@@ -1234,10 +1230,6 @@ module Candidates
       @watched_mode ||= AppSetting.db_value_for("watched_mode").to_s
     end
 
-    def low_confidence_mapping_for?(watchable)
-      watchable.mapping_status_code.to_s == "provisional_title_year"
-    end
-
     def ambiguous_mapping_for?(watchable)
       watchable.mapping_status_code.to_s == "ambiguous_conflict"
     end
@@ -1248,10 +1240,6 @@ module Candidates
 
     def in_progress_min_offset_ms
       @in_progress_min_offset_ms ||= AppSetting.db_value_for("in_progress_min_offset_ms").to_i
-    end
-
-    def flag_enabled?(flags_hash, key)
-      ActiveModel::Type::Boolean.new.cast(flags_hash.is_a?(Hash) ? flags_hash[key] : false)
     end
 
     def track_guardrail_blocks(blocker_flags)

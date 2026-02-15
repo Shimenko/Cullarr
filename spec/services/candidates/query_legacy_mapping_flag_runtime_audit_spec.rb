@@ -11,10 +11,9 @@ RSpec.describe Candidates::Query, type: :service do
 
   let(:legacy_flag_decision_patterns) do
     [
-      /flag_enabled\(\s*[^,\n]+metadata_json,\s*["']low_confidence_mapping["']\s*\)/,
-      /flag_enabled\(\s*[^,\n]+metadata_json,\s*["']ambiguous_mapping["']\s*\)/,
-      /metadata_json\[(["'])low_confidence_mapping\1\]/,
-      /metadata_json\[(["'])ambiguous_mapping\1\]/
+      /flag_enabled\(\s*[^,\n]+metadata_json,\s*["'](?:external_id_mismatch|low_confidence_mapping|ambiguous_mapping)["']\s*\)/,
+      /metadata_json\[(["'])(?:external_id_mismatch|low_confidence_mapping|ambiguous_mapping)\1\]/,
+      /metadata_json\.dig\(\s*(["'])(?:external_id_mismatch|low_confidence_mapping|ambiguous_mapping)\1\s*\)/
     ]
   end
 

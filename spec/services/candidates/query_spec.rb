@@ -622,7 +622,7 @@ RSpec.describe Candidates::Query, type: :service do
       )
     end
 
-    it "does not override v2 mapping status with legacy external_id_mismatch metadata flag" do
+    it "does not override v2 mapping status when legacy external_id_mismatch metadata flag is present" do
       integration = create_integration!(name: "Radarr ID Mismatch", host: "id-mismatch")
       user = PlexUser.create!(tautulli_user_id: 110, friendly_name: "ID Mismatch User", is_hidden: false)
       movie = Movie.create!(
@@ -657,10 +657,10 @@ RSpec.describe Candidates::Query, type: :service do
       row = result.items.find { |item| item[:candidate_id] == "movie:#{movie.id}" }
       expect(row.dig(:mapping_status, :code)).to eq("verified_external_ids")
       expect(row.dig(:mapping_status, :state)).to eq("verified")
-      expect(row[:risk_flags]).to include("external_id_mismatch")
+      expect(row[:risk_flags]).not_to include("external_id_mismatch")
     end
 
-    it "keeps ambiguous_conflict precedence over external_id_mismatch" do
+    it "keeps ambiguous_conflict precedence when external_id_mismatch metadata flag is present" do
       integration = create_integration!(name: "Radarr Ambiguous Precedence", host: "ambiguous-precedence")
       user = PlexUser.create!(tautulli_user_id: 111, friendly_name: "Ambiguous Precedence User", is_hidden: false)
       movie = Movie.create!(
@@ -695,6 +695,7 @@ RSpec.describe Candidates::Query, type: :service do
       expect(row.dig(:mapping_status, :code)).to eq("ambiguous_conflict")
       expect(row.dig(:mapping_status, :state)).to eq("ambiguous")
       expect(row[:blocker_flags]).to include("ambiguous_mapping")
+      expect(row[:risk_flags]).not_to include("external_id_mismatch")
     end
 
     it "maps verified_tv_structure directly to v2 outward contract" do

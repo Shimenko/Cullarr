@@ -198,6 +198,28 @@ can include additive mapping-phase profile counters under
 
 - `profile_bootstrap_integrations`
 - `profile_scheduled_integrations`
+- `enrichment_watchable_get_metadata_attempted`
+- `enrichment_watchable_get_metadata_skipped`
+- `enrichment_watchable_get_metadata_failed`
+- `enrichment_show_get_metadata_attempted`
+- `enrichment_show_get_metadata_skipped`
+- `enrichment_show_get_metadata_failed`
+- `enrichment_episode_fallback_get_metadata_attempted`
+- `enrichment_episode_fallback_get_metadata_skipped`
+- `enrichment_episode_fallback_get_metadata_failed`
+
+Enrichment counters are call-level observability signals by source context and endpoint context:
+
+- `attempted`: a metadata call was issued for that source context.
+- `skipped`: that source context stage was entered but no metadata call was issued (cache hit, budget exhausted, or missing rating key for watchable/fallback).
+- `failed`: a metadata call was issued for that source context, but the payload was unusable or the call failed.
+
+`failed` is a subset of `attempted`: issued unusable/error calls increment both counters.
+
+Stage eligibility is deterministic:
+
+- `show_*` counters increment only when show recheck stage is entered (show rating key present).
+- `episode_fallback_*` counters increment only when episode fallback stage is entered.
 
 ## `GET /api/v1/image-proxy`
 

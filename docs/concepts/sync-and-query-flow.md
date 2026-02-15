@@ -41,6 +41,12 @@ Run state is stored in `sync_runs` (status, phase, counts, errors).
   - attempted (metadata call issued)
   - skipped (no call issued)
   - failed (call issued but unusable/failed)
+- emits additive mapping observability counters in `phase_counts.tautulli_library_mapping`:
+  - status distribution and promotion funnel counters
+  - enrichment counters by source context and endpoint context (`get_metadata`)
+  - source-stage semantics are deterministic:
+    - `show_*` counters increment only when show recheck stage is entered (show rating key present)
+    - `episode_fallback_*` counters increment only when fallback stage is entered
 
 ## No overlapping syncs
 

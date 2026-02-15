@@ -22,9 +22,7 @@ module CandidatesHelper
     "ambiguous_ownership" => "File Claimed by Multiple Libraries",
     "rollup_not_strictly_eligible" => "Strict Rollup Block",
     "multiple_versions" => "Multiple Versions",
-    "no_plex_mapping" => "Found in Sonarr/Radarr, not linked in Plex",
-    "external_id_mismatch" => "Plex ID Conflict",
-    "low_confidence_mapping" => "Linked by Fallback Metadata"
+    "no_plex_mapping" => "Found in Sonarr/Radarr, not linked in Plex"
   }.freeze
 
   BLOCKER_HINTS = {
@@ -68,8 +66,6 @@ module CandidatesHelper
 
   HIDDEN_MAPPING_RISK_FLAGS = %w[
     no_plex_mapping
-    low_confidence_mapping
-    external_id_mismatch
   ].freeze
 
   def candidate_scope_options

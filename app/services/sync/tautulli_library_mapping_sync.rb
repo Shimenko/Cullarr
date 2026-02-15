@@ -23,6 +23,11 @@ module Sync
     RECHECK_OUTCOME_SUCCESS = "success".freeze
     RECHECK_OUTCOME_SKIPPED = "skipped".freeze
     RECHECK_OUTCOME_FAILED = "failed".freeze
+    ENRICHMENT_ENDPOINT_GET_METADATA = "get_metadata".freeze
+    ENRICHMENT_SOURCE_CONTEXT_WATCHABLE = "watchable".freeze
+    ENRICHMENT_SOURCE_CONTEXT_SHOW = "show".freeze
+    ENRICHMENT_SOURCE_CONTEXT_EPISODE_FALLBACK = "episode_fallback".freeze
+    ENRICHMENT_OUTCOMES = %w[attempted skipped failed].freeze
 
     def initialize(sync_run:, correlation_id:, phase_progress: nil)
       @sync_run = sync_run
@@ -69,7 +74,7 @@ module Sync
         watchables_updated: 0,
         watchables_unchanged: 0,
         state_updates: 0
-      }
+      }.merge(enrichment_counter_defaults)
 
       log_info("sync_phase_worker_started phase=tautulli_library_mapping")
       Integration.tautulli.find_each do |integration|
@@ -146,7 +151,7 @@ module Sync
         watchables_updated: 0,
         watchables_unchanged: 0,
         state_updates: 0
-      }
+      }.merge(enrichment_counter_defaults)
       @recheck_metadata_cache = {}
       @recheck_show_metadata_cache = {}
       @series_by_rating_key_cache = {}
@@ -329,7 +334,7 @@ module Sync
         status_ambiguous_conflict: 0,
         watchables_updated: 0,
         watchables_unchanged: 0
-      }
+      }.merge(enrichment_counter_defaults)
       return counts if staged_rows.empty?
 
       canonical_mapper = Sync::CanonicalPathMapper.new(integration:)
@@ -1060,11 +1065,18 @@ module Sync
         )
       end
 
+      enrichment_events = []
       rating_key = row[:plex_rating_key].to_s.strip.presence
       if rating_key.blank?
+        enrichment_events << enrichment_event(
+          source_context: ENRICHMENT_SOURCE_CONTEXT_WATCHABLE,
+          endpoint_context: ENRICHMENT_ENDPOINT_GET_METADATA,
+          outcome: "skipped"
+        )
         return {
           state: RECHECK_OUTCOME_SKIPPED,
-          reason: "recheck_skipped_missing_rating_key"
+          reason: "recheck_skipped_missing_rating_key",
+          enrichment_events: enrichment_events
         }
       end
 
@@ -1073,25 +1085,33 @@ module Sync
         rating_key: rating_key,
         recheck_budget: recheck_budget
       )
+      metadata = metadata_result.fetch(:metadata)
+      enrichment_events << enrichment_event(
+        source_context: ENRICHMENT_SOURCE_CONTEXT_WATCHABLE,
+        endpoint_context: ENRICHMENT_ENDPOINT_GET_METADATA,
+        outcome: enrichment_outcome_for(metadata_result:, metadata_present: metadata.present?)
+      )
       if metadata_result.fetch(:budget_exhausted, false)
         return {
           state: RECHECK_OUTCOME_SKIPPED,
           reason: "recheck_skipped_scheduled_recheck_budget",
-          metadata_call_issued: false
+          metadata_call_issued: false,
+          enrichment_events: enrichment_events
         }
       end
-      metadata = metadata_result.fetch(:metadata)
       if metadata.blank?
         return {
           state: RECHECK_OUTCOME_SKIPPED,
           reason: "recheck_skipped_cached_metadata_unusable",
-          metadata_call_issued: false
+          metadata_call_issued: false,
+          enrichment_events: enrichment_events
         } unless metadata_result.fetch(:call_issued)
 
         return {
           state: RECHECK_OUTCOME_FAILED,
           reason: "recheck_failed_metadata_lookup",
-          metadata_call_issued: true
+          metadata_call_issued: true,
+          enrichment_events: enrichment_events
         }
       end
 
@@ -1105,6 +1125,7 @@ module Sync
       {
         state: RECHECK_OUTCOME_SUCCESS,
         metadata_call_issued: metadata_result.fetch(:call_issued),
+        enrichment_events: enrichment_events,
         context: context,
         evaluation: evaluation
       }
@@ -1115,10 +1136,15 @@ module Sync
       # - attempted: at least one metadata call issued for this row
       # - skipped: no metadata call issued for this row
       # - failed: row ends failed after an issued call path yields unusable metadata
+      #
+      # Source-context enrichment counter semantics:
+      # - show.* counters are emitted only when show stage is entered (show rating key present).
+      # - episode_fallback.* counters are emitted only when fallback stage is entered.
       metadata_call_issued = false
       show_context = nil
       show_evaluation = nil
       show_metadata = nil
+      enrichment_events = []
 
       show_rating_key = row[:plex_grandparent_rating_key].to_s.strip.presence
       if show_rating_key.present?
@@ -1128,17 +1154,23 @@ module Sync
           show_rating_key: show_rating_key,
           recheck_budget: recheck_budget
         )
+        show_metadata = show_metadata_result.fetch(:metadata)
+        enrichment_events << enrichment_event(
+          source_context: ENRICHMENT_SOURCE_CONTEXT_SHOW,
+          endpoint_context: ENRICHMENT_ENDPOINT_GET_METADATA,
+          outcome: enrichment_outcome_for(metadata_result: show_metadata_result, metadata_present: show_metadata.present?)
+        )
         if show_metadata_result.fetch(:budget_exhausted, false)
           return {
             state: RECHECK_OUTCOME_SKIPPED,
             reason: "recheck_skipped_scheduled_recheck_budget",
             metadata_call_issued: false,
+            enrichment_events: enrichment_events,
             context: show_context,
             evaluation: show_evaluation
           }
         end
         metadata_call_issued ||= show_metadata_result.fetch(:call_issued)
-        show_metadata = show_metadata_result.fetch(:metadata)
 
         if show_metadata.present?
           show_context = row_context_for(
@@ -1154,6 +1186,7 @@ module Sync
               state: RECHECK_OUTCOME_SUCCESS,
               reason: "recheck_show_metadata_resolved",
               metadata_call_issued: metadata_call_issued,
+              enrichment_events: enrichment_events,
               context: show_context,
               evaluation: show_evaluation
             }
@@ -1163,10 +1196,16 @@ module Sync
 
       rating_key = row[:plex_rating_key].to_s.strip.presence
       if rating_key.blank?
+        enrichment_events << enrichment_event(
+          source_context: ENRICHMENT_SOURCE_CONTEXT_EPISODE_FALLBACK,
+          endpoint_context: ENRICHMENT_ENDPOINT_GET_METADATA,
+          outcome: "skipped"
+        )
         return {
           state: metadata_call_issued ? RECHECK_OUTCOME_FAILED : RECHECK_OUTCOME_SKIPPED,
           reason: metadata_call_issued ? "recheck_failed_episode_metadata_missing_rating_key" : "recheck_skipped_missing_rating_key",
           metadata_call_issued: metadata_call_issued,
+          enrichment_events: enrichment_events,
           context: show_context,
           evaluation: show_evaluation
         }
@@ -1177,23 +1216,30 @@ module Sync
         rating_key: rating_key,
         recheck_budget: recheck_budget
       )
+      metadata = metadata_result.fetch(:metadata)
+      enrichment_events << enrichment_event(
+        source_context: ENRICHMENT_SOURCE_CONTEXT_EPISODE_FALLBACK,
+        endpoint_context: ENRICHMENT_ENDPOINT_GET_METADATA,
+        outcome: enrichment_outcome_for(metadata_result:, metadata_present: metadata.present?)
+      )
       if metadata_result.fetch(:budget_exhausted, false)
         return {
           state: RECHECK_OUTCOME_SKIPPED,
           reason: "recheck_skipped_scheduled_recheck_budget",
           metadata_call_issued: metadata_call_issued,
+          enrichment_events: enrichment_events,
           context: show_context,
           evaluation: show_evaluation
         }
       end
       metadata_call_issued ||= metadata_result.fetch(:call_issued)
-      metadata = metadata_result.fetch(:metadata)
 
       if metadata.blank?
         return {
           state: metadata_call_issued ? RECHECK_OUTCOME_FAILED : RECHECK_OUTCOME_SKIPPED,
           reason: metadata_result.fetch(:call_issued) ? "recheck_failed_episode_metadata_lookup" : "recheck_skipped_cached_metadata_unusable",
           metadata_call_issued: metadata_call_issued,
+          enrichment_events: enrichment_events,
           context: show_context,
           evaluation: show_evaluation
         }
@@ -1212,6 +1258,7 @@ module Sync
         state: RECHECK_OUTCOME_SUCCESS,
         reason: "recheck_episode_metadata_fallback",
         metadata_call_issued: metadata_call_issued,
+        enrichment_events: enrichment_events,
         context: context,
         evaluation: evaluation
       }
@@ -1653,6 +1700,14 @@ module Sync
 
       counts[:recheck_eligible_rows] += 1
       counts[:provisional_seen] += 1 if first_status == "provisional_title_year"
+      Array(outcome[:enrichment_events]).each do |event|
+        increment_enrichment_context_counter!(
+          counts: counts,
+          source_context: event.fetch(:source_context),
+          endpoint_context: event.fetch(:endpoint_context),
+          outcome: event.fetch(:outcome)
+        )
+      end
 
       case outcome.fetch(:state)
       when RECHECK_OUTCOME_SUCCESS
@@ -1686,6 +1741,28 @@ module Sync
           counts[:unresolved_recheck_failed] += 1
         end
       end
+    end
+
+    # Counter writes happen only here to keep observability deterministic and
+    # avoid double counting from helper/fetch methods:
+    # - `show.*` counters increment only when show stage is entered.
+    # - `episode_fallback.*` counters increment only when fallback stage is entered.
+    # - `failed` is a subset of `attempted`; issued unusable/error calls increment both.
+    def increment_enrichment_context_counter!(counts:, source_context:, endpoint_context:, outcome:)
+      key = enrichment_counter_key(
+        source_context: source_context,
+        endpoint_context: endpoint_context,
+        outcome: outcome
+      )
+      counts[key] = counts.fetch(key, 0) + 1
+      return unless outcome == "failed"
+
+      attempted_key = enrichment_counter_key(
+        source_context: source_context,
+        endpoint_context: endpoint_context,
+        outcome: "attempted"
+      )
+      counts[attempted_key] = counts.fetch(attempted_key, 0) + 1
     end
 
     def increment_transition_counters!(counts:, first_status:, final_status:)
@@ -1726,6 +1803,44 @@ module Sync
       else
         :status_unresolved
       end
+    end
+
+    def enrichment_counter_defaults
+      [
+        ENRICHMENT_SOURCE_CONTEXT_WATCHABLE,
+        ENRICHMENT_SOURCE_CONTEXT_SHOW,
+        ENRICHMENT_SOURCE_CONTEXT_EPISODE_FALLBACK
+      ].each_with_object({}) do |source_context, hash|
+        ENRICHMENT_OUTCOMES.each do |outcome|
+          hash[
+            enrichment_counter_key(
+              source_context: source_context,
+              endpoint_context: ENRICHMENT_ENDPOINT_GET_METADATA,
+              outcome: outcome
+            )
+          ] = 0
+        end
+      end
+    end
+
+    def enrichment_counter_key(source_context:, endpoint_context:, outcome:)
+      "enrichment_#{source_context}_#{endpoint_context}_#{outcome}".to_sym
+    end
+
+    def enrichment_event(source_context:, endpoint_context:, outcome:)
+      {
+        source_context: source_context,
+        endpoint_context: endpoint_context,
+        outcome: outcome
+      }
+    end
+
+    def enrichment_outcome_for(metadata_result:, metadata_present:)
+      return "skipped" if metadata_result.fetch(:budget_exhausted, false)
+      return "attempted" if metadata_present && metadata_result.fetch(:call_issued)
+      return "skipped" if metadata_present
+
+      metadata_result.fetch(:call_issued) ? "failed" : "skipped"
     end
 
     def watchable_type_matches_media_type?(watchable:, media_type:)

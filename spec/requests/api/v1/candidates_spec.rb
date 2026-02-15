@@ -180,6 +180,51 @@ RSpec.describe "Api::V1::Candidates", type: :request do
       )
     end
 
+    it "does not emit removed legacy-like mapping risk flags in API payloads" do
+      sign_in_operator!
+      integration = Integration.create!(
+        kind: "radarr",
+        name: "Radarr Legacy Risk Flags",
+        base_url: "https://radarr.legacy-risk-flags.local",
+        api_key: "secret",
+        verify_ssl: true
+      )
+      movie = Movie.create!(
+        integration: integration,
+        radarr_movie_id: 10_102,
+        title: "Legacy Risk Flags Movie",
+        mapping_status_code: "unresolved",
+        mapping_strategy: "no_match",
+        mapping_status_changed_at: Time.current,
+        metadata_json: {
+          "external_id_mismatch" => true,
+          "low_confidence_mapping" => true
+        }
+      )
+      MediaFile.create!(
+        attachable: movie,
+        integration: integration,
+        arr_file_id: 30_102,
+        path: "/media/movies/legacy-risk-flags.mkv",
+        path_canonical: "/media/movies/legacy-risk-flags.mkv",
+        size_bytes: 2.gigabytes
+      )
+      user = PlexUser.create!(tautulli_user_id: 2102, friendly_name: "Legacy Risk Flags User", is_hidden: false)
+      WatchStat.create!(plex_user: user, watchable: movie, play_count: 1)
+
+      get "/api/v1/candidates", params: {
+        scope: "movie",
+        plex_user_ids: [ user.id ],
+        watched_match_mode: "all"
+      }, as: :json
+
+      expect(response).to have_http_status(:ok)
+      row = response.parsed_body.fetch("items").find { |item| item.fetch("candidate_id") == "movie:#{movie.id}" }
+      expect(row.fetch("risk_flags")).not_to include("external_id_mismatch")
+      expect(row.fetch("risk_flags")).not_to include("low_confidence_mapping")
+      expect(row.dig("mapping_status", "code")).to eq("unresolved")
+    end
+
     it "returns tv_episode candidates with contract fields" do
       sign_in_operator!
       integration = Integration.create!(
