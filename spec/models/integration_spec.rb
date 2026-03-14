@@ -65,6 +65,7 @@ RSpec.describe Integration, type: :model do
       radarr_moviefile_fetch_workers: 4,
       radarr_moviefile_fetch_workers_resolved: 4,
       tautulli_history_page_size: 500,
+      tautulli_library_mapping_page_size: 500,
       tautulli_metadata_workers: 4,
       tautulli_metadata_workers_resolved: 4
     )
@@ -115,6 +116,7 @@ RSpec.describe Integration, type: :model do
         "sonarr_fetch_workers" => 99,
         "radarr_moviefile_fetch_workers" => -5,
         "tautulli_history_page_size" => 9_999,
+        "tautulli_library_mapping_page_size" => 9_999,
         "tautulli_metadata_workers" => 999
       }
     )
@@ -124,6 +126,7 @@ RSpec.describe Integration, type: :model do
     expect(integration.sonarr_fetch_workers).to eq(64)
     expect(integration.radarr_moviefile_fetch_workers).to eq(0)
     expect(integration.tautulli_history_page_size).to eq(5000)
+    expect(integration.tautulli_library_mapping_page_size).to eq(5000)
     expect(integration.tautulli_metadata_workers).to eq(64)
   end
 

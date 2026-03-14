@@ -11,7 +11,10 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
       base_url: "https://tautulli.mapping.local",
       api_key: "secret",
       verify_ssl: true,
-      settings_json: { "tautulli_history_page_size" => 100 }
+      settings_json: {
+        "tautulli_history_page_size" => 100,
+        "tautulli_library_mapping_page_size" => 100
+      }
     )
     radarr = Integration.create!(
       kind: "radarr",
@@ -94,7 +97,10 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
       base_url: "https://tautulli.external.local",
       api_key: "secret",
       verify_ssl: true,
-      settings_json: { "tautulli_history_page_size" => 100 }
+      settings_json: {
+        "tautulli_history_page_size" => 100,
+        "tautulli_library_mapping_page_size" => 100
+      }
     )
     sonarr = Integration.create!(
       kind: "sonarr",
@@ -161,7 +167,10 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
       base_url: "https://tautulli.ambiguous-mapping.local",
       api_key: "secret",
       verify_ssl: true,
-      settings_json: { "tautulli_history_page_size" => 100 }
+      settings_json: {
+        "tautulli_history_page_size" => 100,
+        "tautulli_library_mapping_page_size" => 100
+      }
     )
     radarr = Integration.create!(
       kind: "radarr",
@@ -220,7 +229,10 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
       base_url: "https://tautulli.title-year.local",
       api_key: "secret",
       verify_ssl: true,
-      settings_json: { "tautulli_history_page_size" => 100 }
+      settings_json: {
+        "tautulli_history_page_size" => 100,
+        "tautulli_library_mapping_page_size" => 100
+      }
     )
     radarr = Integration.create!(
       kind: "radarr",
@@ -283,7 +295,10 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
       base_url: "https://tautulli.provenance.local",
       api_key: "secret",
       verify_ssl: true,
-      settings_json: { "tautulli_history_page_size" => 100 }
+      settings_json: {
+        "tautulli_history_page_size" => 100,
+        "tautulli_library_mapping_page_size" => 100
+      }
     )
     radarr = Integration.create!(
       kind: "radarr",
@@ -337,6 +352,213 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
     movie.reload
     expect(movie.mapping_status_code).to eq("provisional_title_year")
     expect(movie.mapping_strategy).to eq("title_year_fallback")
+  end
+
+  it "maps by path when metadata exposes both external and managed versions for the same item" do
+    AppSetting.find_or_initialize_by(key: "managed_path_roots").update!(value_json: [ "/storage/data/media" ])
+
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Mixed Version Path Mapping",
+      base_url: "https://tautulli.mixed-version-path.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: {
+        "tautulli_history_page_size" => 500,
+        "tautulli_library_mapping_page_size" => 500
+      }
+    )
+    PathMapping.create!(
+      integration: tautulli,
+      from_prefix: "/home/wafflecrisp/plex/media",
+      to_prefix: "/storage/data/media"
+    )
+    radarr = Integration.create!(
+      kind: "radarr",
+      name: "Radarr Mixed Version Path Mapping",
+      base_url: "https://radarr.mixed-version-path.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    movie = Movie.create!(
+      integration: radarr,
+      radarr_movie_id: 8_101,
+      title: "Mixed Versions Movie",
+      year: 2025,
+      metadata_json: {}
+    )
+    MediaFile.create!(
+      attachable: movie,
+      integration: radarr,
+      arr_file_id: 81_001,
+      path: "/storage/data/media/Movies/Mixed Versions Movie (2025)/owned.mkv",
+      path_canonical: "/storage/data/media/Movies/Mixed Versions Movie (2025)/owned.mkv",
+      size_bytes: 1_000,
+      quality_json: {}
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 42, title: "Movies", section_type: "movie" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 42, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "movie",
+            plex_rating_key: "plex-mixed-8101",
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+    allow(adapter).to receive(:fetch_metadata).with(rating_key: "plex-mixed-8101").and_return(
+      {
+        file_path: "/mnt/bloat/media/movies/Mixed Versions Movie (2025)/shared.mkv",
+        file_paths: [
+          "/mnt/bloat/media/movies/Mixed Versions Movie (2025)/shared.mkv",
+          "/home/wafflecrisp/plex/media/Movies/Mixed Versions Movie (2025)/owned.mkv"
+        ],
+        external_ids: {},
+        provenance: { endpoint: "get_metadata" }
+      }
+    )
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-mixed-version-path").call
+
+    movie.reload
+    expect(movie.mapping_status_code).to eq("verified_path")
+    expect(movie.mapping_strategy).to eq("path_match")
+    expect(movie.mapping_diagnostics_json.dig("path", "raw_path")).to eq(
+      "/home/wafflecrisp/plex/media/Movies/Mixed Versions Movie (2025)/owned.mkv"
+    )
+    expect(movie.mapping_diagnostics_json.dig("path", "canonical_path")).to eq(
+      "/storage/data/media/Movies/Mixed Versions Movie (2025)/owned.mkv"
+    )
+    expect(movie.mapping_diagnostics_json.dig("path", "ownership")).to eq("managed")
+    expect(movie.mapping_diagnostics_json.dig("path", "path_set_ownership")).to eq("mixed")
+    expect(movie.mapping_diagnostics_json.dig("path", "mixed_path_sources")).to be(true)
+    expect(result).to include(
+      rows_mapped_by_path: 1,
+      metadata_recheck_attempted: 1,
+      unresolved_rechecked: 1,
+      rows_ambiguous: 0
+    )
+  end
+
+  it "fails closed when multiple managed metadata paths resolve to different watchables" do
+    AppSetting.find_or_initialize_by(key: "managed_path_roots").update!(value_json: [ "/storage/data/media" ])
+
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Managed Multi-Path Conflict",
+      base_url: "https://tautulli.managed-multi-path-conflict.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: {
+        "tautulli_history_page_size" => 500,
+        "tautulli_library_mapping_page_size" => 500
+      }
+    )
+    PathMapping.create!(
+      integration: tautulli,
+      from_prefix: "/home/wafflecrisp/plex/media",
+      to_prefix: "/storage/data/media"
+    )
+    radarr = Integration.create!(
+      kind: "radarr",
+      name: "Radarr Managed Multi-Path Conflict",
+      base_url: "https://radarr.managed-multi-path-conflict.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    provisional_movie = Movie.create!(
+      integration: radarr,
+      radarr_movie_id: 8_201,
+      title: "Ambiguous Multi Path Movie",
+      year: 2024,
+      metadata_json: {}
+    )
+    MediaFile.create!(
+      attachable: provisional_movie,
+      integration: radarr,
+      arr_file_id: 82_001,
+      path: "/storage/data/media/Movies/Ambiguous Multi Path Movie (2024)/first.mkv",
+      path_canonical: "/storage/data/media/Movies/Ambiguous Multi Path Movie (2024)/first.mkv",
+      size_bytes: 1_000,
+      quality_json: {}
+    )
+    other_movie = Movie.create!(
+      integration: radarr,
+      radarr_movie_id: 8_202,
+      title: "Other Multi Path Target",
+      year: 2024,
+      metadata_json: {}
+    )
+    MediaFile.create!(
+      attachable: other_movie,
+      integration: radarr,
+      arr_file_id: 82_002,
+      path: "/storage/data/media/Movies/Other Multi Path Target (2024)/second.mkv",
+      path_canonical: "/storage/data/media/Movies/Other Multi Path Target (2024)/second.mkv",
+      size_bytes: 1_000,
+      quality_json: {}
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 43, title: "Movies", section_type: "movie" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 43, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "movie",
+            title: "Ambiguous Multi Path Movie",
+            year: 2024,
+            plex_rating_key: "plex-ambiguous-8201",
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+    allow(adapter).to receive(:fetch_metadata).with(rating_key: "plex-ambiguous-8201").and_return(
+      {
+        file_path: "/home/wafflecrisp/plex/media/Movies/Ambiguous Multi Path Movie (2024)/first.mkv",
+        file_paths: [
+          "/home/wafflecrisp/plex/media/Movies/Ambiguous Multi Path Movie (2024)/first.mkv",
+          "/home/wafflecrisp/plex/media/Movies/Other Multi Path Target (2024)/second.mkv"
+        ],
+        external_ids: {},
+        provenance: { endpoint: "get_metadata" }
+      }
+    )
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-managed-multi-path-conflict").call
+
+    provisional_movie.reload
+    expect(provisional_movie.mapping_status_code).to eq("ambiguous_conflict")
+    expect(provisional_movie.mapping_strategy).to eq("conflict_detected")
+    expect(provisional_movie.mapping_diagnostics_json["conflict_reason"]).to eq("multiple_path_candidates")
+    expect(provisional_movie.mapping_diagnostics_json.dig("path", "recheck_candidate_paths").size).to eq(2)
+    expect(result).to include(
+      rows_ambiguous: 1,
+      rows_mapped_by_path: 0,
+      provisional_conflicted: 1,
+      metadata_recheck_attempted: 1
+    )
   end
 
   it "promotes provisional title/year matches when recheck finds same watchable by strong ids" do
@@ -824,7 +1046,10 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
       base_url: "https://tautulli.tv-show-first-baseline.local",
       api_key: "secret",
       verify_ssl: true,
-      settings_json: { "tautulli_history_page_size" => 1 }
+      settings_json: {
+        "tautulli_history_page_size" => 1,
+        "tautulli_library_mapping_page_size" => 1
+      }
     )
     sonarr = Integration.create!(
       kind: "sonarr",
@@ -952,6 +1177,127 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
     )
     expect(result[:metadata_recheck_attempted] + result[:metadata_recheck_skipped]).to eq(result[:recheck_eligible_rows])
     expect(result[:metadata_recheck_failed]).to be <= result[:metadata_recheck_attempted]
+  end
+
+  it "expands hierarchical tv discovery rows from show to season to episode before mapping" do
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Hierarchical TV Discovery",
+      base_url: "https://tautulli.hierarchical-tv-discovery.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    sonarr = Integration.create!(
+      kind: "sonarr",
+      name: "Sonarr Hierarchical TV Discovery",
+      base_url: "https://sonarr.hierarchical-tv-discovery.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    series = Series.create!(
+      integration: sonarr,
+      sonarr_series_id: 91_500,
+      title: "Hierarchical TV Discovery",
+      tvdb_id: 915_000
+    )
+    season = Season.create!(series:, season_number: 1)
+    episode = Episode.create!(
+      integration: sonarr,
+      season: season,
+      sonarr_episode_id: 91_512,
+      episode_number: 12,
+      metadata_json: {}
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 88, title: "TV", section_type: "show" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 88, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "show",
+            plex_rating_key: "plex-show-9150",
+            title: "Hierarchical TV Discovery"
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+    allow(adapter).to receive(:fetch_library_media_page).with(rating_key: "plex-show-9150", start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "season",
+            plex_rating_key: "plex-season-9151",
+            plex_parent_rating_key: "plex-show-9150",
+            season_number: 1,
+            title: "Season 1"
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+    allow(adapter).to receive(:fetch_library_media_page).with(rating_key: "plex-season-9151", start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "episode",
+            plex_rating_key: "plex-episode-91512",
+            plex_parent_rating_key: "plex-season-9151",
+            plex_grandparent_rating_key: "plex-show-9150",
+            season_number: 1,
+            episode_number: 12,
+            title: "Grand Final",
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+    allow(adapter).to receive(:fetch_metadata).with(rating_key: "plex-show-9150").and_return(
+      {
+        file_path: nil,
+        external_ids: { tvdb_id: 915_000 },
+        provenance: { endpoint: "get_metadata" }
+      }
+    )
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-hierarchical-tv-discovery").call
+
+    episode.reload
+    expect(episode.mapping_status_code).to eq("verified_tv_structure")
+    expect(episode.mapping_strategy).to eq("tv_structure_match")
+    expect(episode.mapping_diagnostics_json.dig("tv_structure", "show_identity_source", "source")).to eq(
+      "show_metadata_external_ids"
+    )
+    expect(adapter).to have_received(:fetch_library_media_page).with(library_id: 88, start: 0, length: 500).once
+    expect(adapter).to have_received(:fetch_library_media_page).with(rating_key: "plex-show-9150", start: 0, length: 500).once
+    expect(adapter).to have_received(:fetch_library_media_page).with(rating_key: "plex-season-9151", start: 0, length: 500).once
+    expect(adapter).to have_received(:fetch_metadata).with(rating_key: "plex-show-9150").once
+    expect(result).to include(
+      rows_fetched: 3,
+      rows_invalid: 0,
+      rows_processed: 1,
+      status_verified_tv_structure: 1,
+      rows_unmapped: 0,
+      enrichment_show_get_metadata_attempted: 1,
+      enrichment_episode_fallback_get_metadata_attempted: 0
+    )
   end
 
   it "marks row-level recheck failed when show metadata succeeds but episode fallback is unusable" do
@@ -1691,7 +2037,10 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
       base_url: "https://tautulli.recheck-cross-page-cache.local",
       api_key: "secret",
       verify_ssl: true,
-      settings_json: { "tautulli_history_page_size" => 1 }
+      settings_json: {
+        "tautulli_history_page_size" => 1,
+        "tautulli_library_mapping_page_size" => 1
+      }
     )
     radarr = Integration.create!(
       kind: "radarr",
@@ -2193,6 +2542,67 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
     expect(adapter).to have_received(:fetch_library_media_page).with(library_id: 85, start: 0, length: 2).once
     expect(result).to include(rows_fetched: 2, rows_processed: 2)
     expect(tautulli.reload.settings_json.dig("library_mapping_state", "libraries", "85", "next_start")).to eq(2)
+  end
+
+  it "uses the dedicated mapping page size and advances phase progress while rows are mapped" do
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Mapping Progress",
+      base_url: "https://tautulli.mapping-progress.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: {
+        "tautulli_history_page_size" => 5_000,
+        "tautulli_library_mapping_page_size" => 50
+      }
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_metadata).and_return(nil)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 87, title: "Movies", section_type: "movie" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 87, start: 0, length: 50).and_return(
+      {
+        rows: [
+          {
+            media_type: "movie",
+            title: "Progress One",
+            year: 2024,
+            plex_rating_key: nil,
+            external_ids: {}
+          },
+          {
+            media_type: "movie",
+            title: "Progress Two",
+            year: 2024,
+            plex_rating_key: nil,
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 2,
+        rows_skipped_invalid: 0,
+        records_total: 2,
+        has_more: false,
+        next_start: 2
+      }
+    )
+    progress_events = []
+    phase_progress = instance_double(Sync::ProgressTracker)
+    allow(phase_progress).to receive(:add_total!) { |count| progress_events << [ :add_total, count ] }
+    allow(phase_progress).to receive(:advance!) { |count| progress_events << [ :advance, count ] }
+
+    result = described_class.new(
+      sync_run: sync_run,
+      correlation_id: "corr-library-progress-stream",
+      phase_progress: phase_progress
+    ).call
+
+    expect(adapter).to have_received(:fetch_library_media_page).with(library_id: 87, start: 0, length: 50).once
+    expect(result).to include(rows_fetched: 2, rows_processed: 2, rows_unmapped: 2)
+    expect(progress_events).to include([ :add_total, 1 ], [ :add_total, 4 ])
+    expect(progress_events.count { |event| event == [ :advance, 2 ] }).to eq(2)
   end
 
   it "does not set bootstrap marker when traversal fails before baseline completion" do

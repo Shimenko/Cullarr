@@ -66,6 +66,7 @@ RSpec.describe Integrations::TautulliAdapter, type: :service do
     expect(metadata).to include(
       duration_ms: 7_260_000,
       plex_guid: "plex://movie/701",
+      file_paths: [ "/mnt/media/movies/Example Movie (2024)/movie.mkv" ],
       file_path: "/mnt/media/movies/Example Movie (2024)/movie.mkv"
     )
     expect(metadata.fetch(:external_ids)).to include(
@@ -137,6 +138,134 @@ RSpec.describe Integrations::TautulliAdapter, type: :service do
     stubs.verify_stubbed_calls
   end
 
+  it "normalizes hierarchical tv discovery pages for show and season descendants" do
+    top_level_payload = {
+      response: {
+        result: "success",
+        data: {
+          recordsFiltered: 1,
+          data: [
+            {
+              media_type: "show",
+              rating_key: "plex-show-1",
+              title: "Hierarchical Show",
+              year: 2024
+            }
+          ]
+        }
+      }
+    }.to_json
+    season_payload = {
+      response: {
+        result: "success",
+        data: {
+          recordsFiltered: 1,
+          data: [
+            {
+              media_type: "season",
+              rating_key: "plex-season-1",
+              parent_rating_key: "plex-show-1",
+              title: "Season 1",
+              media_index: "1"
+            }
+          ]
+        }
+      }
+    }.to_json
+    episode_payload = {
+      response: {
+        result: "success",
+        data: {
+          recordsFiltered: 2,
+          data: [
+            {
+              media_type: "episode",
+              rating_key: "plex-episode-1",
+              parent_rating_key: "plex-season-1",
+              grandparent_rating_key: "plex-show-1",
+              title: "Pilot",
+              parent_media_index: "1",
+              media_index: "1"
+            },
+            {
+              media_type: "episode",
+              rating_key: "plex-episode-2",
+              parent_rating_key: "plex-season-1",
+              grandparent_rating_key: "plex-show-1",
+              title: "Finale",
+              parent_media_index: "1",
+              media_index: "2"
+            }
+          ]
+        }
+      }
+    }.to_json
+
+    stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+      stub.get("api/v2") do |env|
+        expect(env.params["apikey"]).to eq("secret")
+        expect(env.params["cmd"]).to eq("get_library_media_info")
+
+        payload = if env.params["section_id"] == "1"
+          top_level_payload
+        elsif env.params["rating_key"] == "plex-show-1"
+          season_payload
+        elsif env.params["rating_key"] == "plex-season-1"
+          episode_payload
+        else
+          raise "unexpected params: #{env.params.inspect}"
+        end
+
+        [ 200, {}, payload ]
+      end
+    end
+    adapter = described_class.new(integration:, connection: test_connection(stubs))
+
+    show_page = adapter.fetch_library_media_page(library_id: 1, start: 0, length: 10)
+    season_page = adapter.fetch_library_media_page(rating_key: "plex-show-1", start: 0, length: 10)
+    episode_page = adapter.fetch_library_media_page(rating_key: "plex-season-1", start: 0, length: 10)
+
+    expect(show_page[:rows]).to contain_exactly(
+      include(
+        media_type: "show",
+        plex_rating_key: "plex-show-1",
+        title: "Hierarchical Show",
+        year: 2024
+      )
+    )
+    expect(show_page[:rows_skipped_invalid]).to eq(0)
+    expect(season_page[:rows]).to contain_exactly(
+      include(
+        media_type: "season",
+        plex_rating_key: "plex-season-1",
+        plex_parent_rating_key: "plex-show-1",
+        season_number: 1,
+        title: "Season 1"
+      )
+    )
+    expect(season_page[:rows_skipped_invalid]).to eq(0)
+    expect(episode_page[:rows]).to contain_exactly(
+      include(
+        media_type: "episode",
+        plex_rating_key: "plex-episode-1",
+        plex_parent_rating_key: "plex-season-1",
+        plex_grandparent_rating_key: "plex-show-1",
+        season_number: 1,
+        episode_number: 1
+      ),
+      include(
+        media_type: "episode",
+        plex_rating_key: "plex-episode-2",
+        plex_parent_rating_key: "plex-season-1",
+        plex_grandparent_rating_key: "plex-show-1",
+        season_number: 1,
+        episode_number: 2
+      )
+    )
+    expect(episode_page[:rows_skipped_invalid]).to eq(0)
+    stubs.verify_stubbed_calls
+  end
+
   it "extracts external ids from guids and encodes absent file-path signal as none" do
     payload = {
       response: {
@@ -169,6 +298,7 @@ RSpec.describe Integrations::TautulliAdapter, type: :service do
       tmdb_id: 1_132_654,
       tvdb_id: 5_343_660
     )
+    expect(metadata[:file_paths]).to eq([])
     expect(metadata[:file_path]).to be_nil
     expect(metadata.dig(:provenance, :signals, :file_path)).to eq(
       source: "none",
@@ -277,9 +407,65 @@ RSpec.describe Integrations::TautulliAdapter, type: :service do
 
     metadata = adapter.fetch_metadata(rating_key: "5000")
 
+    expect(metadata[:file_paths]).to eq([ "/mnt/media/movies/Malformed Safe/movie.mkv" ])
     expect(metadata[:file_path]).to eq("/mnt/media/movies/Malformed Safe/movie.mkv")
     expect(metadata.fetch(:external_ids)).to eq(imdb_id: "tt5000500")
     expect(metadata.dig(:provenance, :signals, :file_path, :source)).to eq("metadata_media_info_parts_file")
+    stubs.verify_stubbed_calls
+  end
+
+  it "returns ordered unique metadata file paths while keeping file_path backward compatible" do
+    payload = {
+      response: {
+        result: "success",
+        data: {
+          duration: 5_001_000,
+          guid: "plex://movie/6000",
+          media_info: [
+            {
+              parts: [
+                { file: " /mnt/media/movies/Multi Path/owned.mkv " },
+                { file: "/mnt/media/movies/Multi Path/owned.mkv" },
+                { file: "/mnt/media/movies/Multi Path/alt-cut.mkv" }
+              ]
+            },
+            {
+              parts: [
+                { file: "/mnt/media/movies/Multi Path/directors-cut.mkv" },
+                { file: "   " },
+                "invalid"
+              ]
+            }
+          ],
+          guids: [ "imdb://tt6000600" ]
+        }
+      }
+    }.to_json
+
+    stubs = Faraday::Adapter::Test::Stubs.new do |stub|
+      stub.get("api/v2") do |env|
+        expect(env.params["cmd"]).to eq("get_metadata")
+        expect(env.params["rating_key"]).to eq("6000")
+        [ 200, {}, payload ]
+      end
+    end
+    adapter = described_class.new(integration:, connection: test_connection(stubs))
+
+    metadata = adapter.fetch_metadata(rating_key: "6000")
+
+    expect(metadata[:file_paths]).to eq(
+      [
+        "/mnt/media/movies/Multi Path/owned.mkv",
+        "/mnt/media/movies/Multi Path/alt-cut.mkv",
+        "/mnt/media/movies/Multi Path/directors-cut.mkv"
+      ]
+    )
+    expect(metadata[:file_path]).to eq("/mnt/media/movies/Multi Path/owned.mkv")
+    expect(metadata.fetch(:external_ids)).to eq(imdb_id: "tt6000600")
+    expect(metadata.dig(:provenance, :signals, :file_path)).to include(
+      source: "metadata_media_info_parts_file",
+      value: "/mnt/media/movies/Multi Path/owned.mkv"
+    )
     stubs.verify_stubbed_calls
   end
 

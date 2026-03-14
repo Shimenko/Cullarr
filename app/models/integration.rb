@@ -15,6 +15,7 @@ class Integration < ApplicationRecord
     :sonarr_fetch_workers,
     :radarr_moviefile_fetch_workers,
     :tautulli_history_page_size,
+    :tautulli_library_mapping_page_size,
     :tautulli_metadata_workers
 
   has_many :arr_tags, dependent: :destroy
@@ -68,6 +69,11 @@ class Integration < ApplicationRecord
 
   def tautulli_history_page_size
     raw_value = settings_json["tautulli_history_page_size"] || 500
+    raw_value.to_i.clamp(50, 5_000)
+  end
+
+  def tautulli_library_mapping_page_size
+    raw_value = settings_json["tautulli_library_mapping_page_size"] || 500
     raw_value.to_i.clamp(50, 5_000)
   end
 
@@ -147,6 +153,7 @@ class Integration < ApplicationRecord
         radarr_moviefile_fetch_workers: radarr_moviefile_fetch_workers,
         radarr_moviefile_fetch_workers_resolved: radarr_moviefile_fetch_workers_resolved,
         tautulli_history_page_size: tautulli_history_page_size,
+        tautulli_library_mapping_page_size: tautulli_library_mapping_page_size,
         tautulli_metadata_workers: tautulli_metadata_workers,
         tautulli_metadata_workers_resolved: tautulli_metadata_workers_resolved
       },
@@ -211,6 +218,7 @@ class Integration < ApplicationRecord
     settings_json["sonarr_fetch_workers"] = sonarr_fetch_workers
     settings_json["radarr_moviefile_fetch_workers"] = radarr_moviefile_fetch_workers
     settings_json["tautulli_history_page_size"] = tautulli_history_page_size
+    settings_json["tautulli_library_mapping_page_size"] = tautulli_library_mapping_page_size
     settings_json["tautulli_metadata_workers"] = tautulli_metadata_workers
     self.verify_ssl = true if verify_ssl.nil?
   end

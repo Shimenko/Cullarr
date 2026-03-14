@@ -396,6 +396,17 @@
           disabled: default_integration_kind != "tautulli"
         ) %>
         <%= render Ui::InputComponent.new(
+          name: "integration[settings][tautulli_library_mapping_page_size]",
+          label: "Tautulli Library Mapping Page Size",
+          value: 500,
+          type: :number,
+          min: 50,
+          max: 5000,
+          help_text: "Uses smaller mapping batches than history sync so large libraries progress more smoothly.",
+          autocomplete: "off",
+          disabled: default_integration_kind != "tautulli"
+        ) %>
+        <%= render Ui::InputComponent.new(
           name: "integration[settings][tautulli_metadata_workers]",
           label: "Tautulli Metadata Workers",
           value: 4,
@@ -511,6 +522,16 @@
                 type: :number,
                 min: 50,
                 max: 5000,
+                autocomplete: "off"
+              ) %>
+              <%= render Ui::InputComponent.new(
+                name: "integration[settings][tautulli_library_mapping_page_size]",
+                label: "Tautulli Library Mapping Page Size",
+                value: integration.tautulli_library_mapping_page_size,
+                type: :number,
+                min: 50,
+                max: 5000,
+                help_text: "Uses smaller mapping batches than history sync so large libraries progress more smoothly.",
                 autocomplete: "off"
               ) %>
               <%= render Ui::InputComponent.new(

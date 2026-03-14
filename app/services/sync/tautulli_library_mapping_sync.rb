@@ -2,6 +2,7 @@ module Sync
   class TautulliLibraryMappingSync
     SCHEDULED_DISCOVERY_ROW_BUDGET_PER_INTEGRATION = 50_000
     SCHEDULED_METADATA_RECHECK_CALL_BUDGET_PER_INTEGRATION = 5_000
+    PHASE_PROGRESS_MAPPING_ADVANCE_BATCH_SIZE = 100
     ATTEMPT_ORDER = %w[path external_ids tv_structure title_year].freeze
     RECHECK_ELIGIBLE_STATUSES = %w[provisional_title_year unresolved].freeze
 
@@ -182,20 +183,30 @@ module Sync
 
         library_id = library.fetch(:library_id).to_s
         library_state = normalized_library_state(library_states[library_id])
+        unless library_supported_for_mapping?(library)
+          library_state["next_start"] = 0
+          library_state["completed_cycle_count"] += 1
+          library_state["last_completed_at"] = Time.current.iso8601
+          library_states[library_id] = library_state
+          state_changed = true
+          next
+        end
+
         start_offset = library_state.fetch("next_start")
         library_cycle_completed = false
 
         loop do
           break if scheduled_profile?(profile) && discovery_budget_remaining <= 0
 
-          page_length = integration.tautulli_history_page_size
+          page_length = integration.tautulli_library_mapping_page_size
           if scheduled_profile?(profile)
             page_length = [ page_length, discovery_budget_remaining ].min
           end
           break if page_length <= 0
 
-          page = adapter.fetch_library_media_page(
-            library_id: library.fetch(:library_id),
+          page = discovery_page_for(
+            library: library,
+            adapter: adapter,
             start: start_offset,
             length: page_length
           )
@@ -221,14 +232,13 @@ module Sync
             end
             discovery_sequence += 1
           end
-          phase_progress&.advance!(rows.size)
-
           if bootstrap_profile?(profile)
             row_counts = process_staged_rows(
               staged_rows: page_staged_rows,
               integration: integration,
               adapter: adapter,
-              profile: profile
+              profile: profile,
+              phase_progress: phase_progress
             )
             row_counts.each do |key, value|
               counts[key] += value
@@ -261,7 +271,13 @@ module Sync
       end
 
       if scheduled_profile?(profile)
-        row_counts = process_staged_rows(staged_rows:, integration:, adapter:, profile:)
+        row_counts = process_staged_rows(
+          staged_rows: staged_rows,
+          integration: integration,
+          adapter: adapter,
+          profile: profile,
+          phase_progress: phase_progress
+        )
         row_counts.each do |key, value|
           counts[key] += value
         end
@@ -287,6 +303,125 @@ module Sync
       counts
     end
 
+    def library_supported_for_mapping?(library)
+      !library.fetch(:section_type).to_s.in?(%w[artist])
+    end
+
+    def discovery_page_for(library:, adapter:, start:, length:)
+      if library.fetch(:section_type).to_s == "show"
+        tv_discovery_page_for(
+          adapter: adapter,
+          library_id: library.fetch(:library_id),
+          start: start,
+          length: length
+        )
+      else
+        adapter.fetch_library_media_page(
+          library_id: library.fetch(:library_id),
+          start: start,
+          length: length
+        )
+      end
+    end
+
+    def tv_discovery_page_for(adapter:, library_id:, start:, length:)
+      page = adapter.fetch_library_media_page(
+        library_id: library_id,
+        start: start,
+        length: length
+      )
+      rows = []
+      raw_rows_count = page.fetch(:raw_rows_count, 0).to_i
+      rows_skipped_invalid = page.fetch(:rows_skipped_invalid, 0).to_i
+
+      page.fetch(:rows).each do |row|
+        expansion = expand_tv_discovery_row(
+          row: row,
+          adapter: adapter,
+          length: length
+        )
+        rows.concat(expansion.fetch(:rows))
+        raw_rows_count += expansion.fetch(:raw_rows_count)
+        rows_skipped_invalid += expansion.fetch(:rows_skipped_invalid)
+      end
+
+      {
+        rows: rows,
+        raw_rows_count: raw_rows_count,
+        rows_skipped_invalid: rows_skipped_invalid,
+        records_total: page.fetch(:records_total),
+        has_more: page.fetch(:has_more),
+        next_start: page.fetch(:next_start)
+      }
+    end
+
+    def expand_tv_discovery_row(row:, adapter:, length:, depth: 0)
+      return empty_tv_discovery_expansion if depth > 2
+
+      case row[:media_type].to_s
+      when "episode", "movie"
+        {
+          rows: [ row ],
+          raw_rows_count: 0,
+          rows_skipped_invalid: 0
+        }
+      when "show", "season"
+        rating_key = row[:plex_rating_key].to_s.strip.presence
+        return invalid_tv_discovery_expansion if rating_key.blank?
+
+        child_rows = []
+        raw_rows_count = 0
+        rows_skipped_invalid = 0
+        child_start = 0
+
+        loop do
+          page = adapter.fetch_library_media_page(
+            rating_key: rating_key,
+            start: child_start,
+            length: length
+          )
+          raw_rows_count += page.fetch(:raw_rows_count, 0).to_i
+          rows_skipped_invalid += page.fetch(:rows_skipped_invalid, 0).to_i
+
+          page.fetch(:rows).each do |child_row|
+            child_expansion = expand_tv_discovery_row(
+              row: child_row,
+              adapter: adapter,
+              length: length,
+              depth: depth + 1
+            )
+            child_rows.concat(child_expansion.fetch(:rows))
+            raw_rows_count += child_expansion.fetch(:raw_rows_count)
+            rows_skipped_invalid += child_expansion.fetch(:rows_skipped_invalid)
+          end
+
+          break unless page.fetch(:has_more)
+
+          child_start = page.fetch(:next_start).to_i
+        end
+
+        {
+          rows: child_rows,
+          raw_rows_count: raw_rows_count,
+          rows_skipped_invalid: rows_skipped_invalid
+        }
+      else
+        invalid_tv_discovery_expansion
+      end
+    end
+
+    def empty_tv_discovery_expansion
+      {
+        rows: [],
+        raw_rows_count: 0,
+        rows_skipped_invalid: 0
+      }
+    end
+
+    def invalid_tv_discovery_expansion
+      empty_tv_discovery_expansion.merge(rows_skipped_invalid: 1)
+    end
+
     # Deterministic transition matrix for first-pass/recheck outcomes:
     #
     # provisional_title_year + success + same unique strong match => verified_path/verified_external_ids
@@ -302,7 +437,7 @@ module Sync
     #
     # Strong-signal consistency check always runs after strict-order tentative selection.
     # It fails closed to ambiguous_conflict on strong-signal disagreement or type mismatch.
-    def process_staged_rows(staged_rows:, integration:, adapter:, profile:)
+    def process_staged_rows(staged_rows:, integration:, adapter:, profile:, phase_progress: nil)
       counts = {
         rows_processed: 0,
         rows_mapped_by_path: 0,
@@ -368,6 +503,7 @@ module Sync
         limited: scheduled_profile?(profile),
         remaining_calls: SCHEDULED_METADATA_RECHECK_CALL_BUDGET_PER_INTEGRATION
       }
+      pending_progress_rows = 0
 
       ordered_work_items.each do |work_item|
         row = work_item.fetch(:row)
@@ -441,7 +577,15 @@ module Sync
         elsif persistence == :unchanged
           counts[:watchables_unchanged] += 1
         end
+
+        pending_progress_rows += 1
+        next unless pending_progress_rows >= PHASE_PROGRESS_MAPPING_ADVANCE_BATCH_SIZE
+
+        phase_progress&.advance!(pending_progress_rows)
+        pending_progress_rows = 0
       end
+
+      phase_progress&.advance!(pending_progress_rows) if pending_progress_rows.positive?
 
       if counts[:metadata_recheck_attempted] + counts[:metadata_recheck_skipped] != counts[:recheck_eligible_rows]
         raise "library mapping metadata recheck invariant violated: attempted + skipped must equal eligible"
@@ -558,9 +702,14 @@ module Sync
       metadata_external_ids = normalized_external_ids(metadata&.fetch(:external_ids, {}))
       show_external_ids = normalized_external_ids(show_metadata&.fetch(:external_ids, {}))
       effective_external_ids = discovery_external_ids.merge(metadata_external_ids.compact)
-      file_path = metadata&.fetch(:file_path, nil).presence || row[:file_path]
-      canonical_path = canonical_path_for(raw_path: file_path, canonical_mapper: canonical_mapper)
-      ownership = root_classifier.classify(canonical_path)
+      effective_file_paths = effective_file_paths_for(row:, metadata:)
+      path_candidates = path_candidates_for(
+        raw_paths: effective_file_paths,
+        canonical_mapper: canonical_mapper,
+        root_classifier: root_classifier
+      )
+      selected_path_candidate = selected_path_candidate_for(path_candidates: path_candidates)
+      file_path = selected_path_candidate&.fetch(:raw_path, nil) || effective_file_paths.first
 
       {
         media_type: row[:media_type].to_s,
@@ -574,10 +723,17 @@ module Sync
         episode_number: integer_or_nil(row[:episode_number]),
         discovery_file_path: row[:file_path],
         effective_file_path: file_path,
-        canonical_path: canonical_path,
-        ownership: ownership.fetch(:ownership),
-        matched_managed_root: ownership[:matched_managed_root],
-        normalized_path: ownership[:normalized_path],
+        effective_file_paths: effective_file_paths,
+        canonical_path: selected_path_candidate&.fetch(:canonical_path, nil),
+        canonical_paths: path_candidates.map { |candidate| candidate.fetch(:canonical_path) }.uniq,
+        ownership: selected_path_candidate&.fetch(:ownership, nil),
+        path_set_ownership: path_set_ownership_for(path_candidates: path_candidates),
+        mixed_path_sources: mixed_path_sources?(path_candidates: path_candidates),
+        has_managed_path_candidate: path_candidates.any? { |candidate| candidate[:ownership] == "managed" },
+        has_external_path_candidate: path_candidates.any? { |candidate| candidate[:ownership] == "external" },
+        matched_managed_root: selected_path_candidate&.fetch(:matched_managed_root, nil),
+        normalized_path: selected_path_candidate&.fetch(:normalized_path, nil),
+        path_candidates: path_candidates,
         external_ids: effective_external_ids,
         discovery_external_ids: discovery_external_ids,
         metadata_external_ids: metadata_external_ids,
@@ -690,23 +846,61 @@ module Sync
     end
 
     def resolve_path_candidates(context)
-      canonical_path = context.fetch(:canonical_path).to_s
-      return empty_path_result if canonical_path.blank?
+      path_candidates = Array(context.fetch(:path_candidates, []))
+      return empty_path_result if path_candidates.empty?
 
-      matches = @path_lookup.fetch(canonical_path) do
-        fetched = watchables_for_canonical_path(canonical_path)
-        @path_lookup[canonical_path] = fetched
-      end
       expected_type = context.fetch(:media_type) == "movie" ? Movie : Episode
-      expected_matches = matches.select { |watchable| watchable.is_a?(expected_type) }
-      unique = expected_matches.one? ? expected_matches.first : nil
+      candidate_results = path_candidates.map do |path_candidate|
+        canonical_path = path_candidate.fetch(:canonical_path)
+        matches = @path_lookup.fetch(canonical_path) do
+          fetched = watchables_for_canonical_path(canonical_path)
+          @path_lookup[canonical_path] = fetched
+        end
+        expected_matches = matches.select { |watchable| watchable.is_a?(expected_type) }
+
+        {
+          raw_path: path_candidate.fetch(:raw_path),
+          canonical_path: canonical_path,
+          normalized_path: path_candidate.fetch(:normalized_path),
+          ownership: path_candidate.fetch(:ownership),
+          matched_managed_root: path_candidate.fetch(:matched_managed_root),
+          candidate_count: matches.size,
+          expected_candidate_count: expected_matches.size,
+          mismatch_present: expected_matches.empty? && matches.any?,
+          watchables: matches,
+          expected_watchables: expected_matches
+        }
+      end
+      unique_matches = unique_watchables(candidate_results.flat_map { |result| result.fetch(:watchables) })
+      expected_unique_matches = unique_watchables(candidate_results.flat_map { |result| result.fetch(:expected_watchables) })
+      unique = expected_unique_matches.one? ? expected_unique_matches.first : nil
+      matched_path = if unique.present?
+        candidate_results.find do |result|
+          result.fetch(:expected_watchables).any? { |watchable| same_watchable?(watchable, unique) }
+        end
+      else
+        candidate_results.find { |result| result.fetch(:expected_candidate_count).positive? } ||
+          candidate_results.find { |result| result.fetch(:candidate_count).positive? }
+      end
 
       {
-        canonical_path: canonical_path,
-        candidate_count: matches.size,
-        expected_candidate_count: expected_matches.size,
+        canonical_path: matched_path&.fetch(:canonical_path, nil) || context.fetch(:canonical_path),
+        candidate_count: unique_matches.size,
+        expected_candidate_count: expected_unique_matches.size,
         unique_watchable: unique,
-        mismatch_present: expected_matches.empty? && matches.any?
+        mismatch_present: candidate_results.any? { |result| result.fetch(:mismatch_present) },
+        candidate_paths: candidate_results.map do |result|
+          {
+            raw_path: result.fetch(:raw_path),
+            canonical_path: result.fetch(:canonical_path),
+            normalized_path: result.fetch(:normalized_path),
+            ownership: result.fetch(:ownership),
+            matched_managed_root: result.fetch(:matched_managed_root),
+            candidate_count: result.fetch(:candidate_count),
+            expected_candidate_count: result.fetch(:expected_candidate_count),
+            mismatch_present: result.fetch(:mismatch_present)
+          }
+        end
       }
     end
 
@@ -1333,10 +1527,11 @@ module Sync
     def metadata_usable?(metadata)
       return false unless metadata.is_a?(Hash)
 
+      has_file_paths = Array(metadata[:file_paths]).any? { |path| path.to_s.strip.present? }
       has_file_path = metadata[:file_path].to_s.strip.present?
       has_external_ids = normalized_external_ids(metadata.fetch(:external_ids, {})).any?
 
-      has_file_path || has_external_ids
+      has_file_paths || has_file_path || has_external_ids
     end
 
     def metadata_usable_for_show?(metadata)
@@ -1427,7 +1622,7 @@ module Sync
       context = recheck_context || first_context
       evaluation = recheck_evaluation || first_evaluation
 
-      if context.fetch(:ownership) == "external" && no_arr_evidence?(evaluation)
+      if external_only_path_set?(context: context) && no_arr_evidence?(evaluation)
         return {
           status_code: "external_source_not_managed",
           strategy: "external_unmanaged_path",
@@ -1447,8 +1642,8 @@ module Sync
     end
 
     def no_arr_evidence?(evaluation)
-      evaluation.dig(:path, :unique_watchable).blank? &&
-        evaluation.dig(:external_ids, :unique_watchable).blank?
+      evaluation.dig(:path, :candidate_count).to_i.zero? &&
+        evaluation.dig(:external_ids, :candidate_count).to_i.zero?
     end
 
     def resolution_from_evaluation(evaluation)
@@ -1620,6 +1815,7 @@ module Sync
       recheck_context = recheck_outcome[:context]
       recheck_evaluation = recheck_outcome[:evaluation]
       tv_structure = recheck_evaluation&.fetch(:tv_structure, nil) || first_evaluation.fetch(:tv_structure)
+      diagnostics_path_context = recheck_context || first_context
 
       {
         version: "v2",
@@ -1634,15 +1830,26 @@ module Sync
           recheck_show_enrichment: recheck_context&.dig(:provenance, :show_enrichment)
         },
         path: {
-          raw_path: first_context[:discovery_file_path],
-          normalized_path: first_context[:normalized_path],
-          canonical_path: first_context[:canonical_path],
-          ownership: first_context[:ownership],
-          matched_managed_root: first_context[:matched_managed_root],
+          raw_path: diagnostics_path_context[:effective_file_path] || first_context[:discovery_file_path],
+          discovery_raw_path: first_context[:discovery_file_path],
+          raw_paths: diagnostics_path_context[:effective_file_paths],
+          normalized_path: diagnostics_path_context[:normalized_path],
+          canonical_path: diagnostics_path_context[:canonical_path],
+          canonical_paths: diagnostics_path_context[:canonical_paths],
+          ownership: diagnostics_path_context[:ownership],
+          path_set_ownership: diagnostics_path_context[:path_set_ownership],
+          mixed_path_sources: diagnostics_path_context[:mixed_path_sources],
+          matched_managed_root: diagnostics_path_context[:matched_managed_root],
+          candidate_paths: first_evaluation.dig(:path, :candidate_paths),
           first_pass_candidate_count: first_evaluation.dig(:path, :candidate_count).to_i,
           first_pass_expected_candidate_count: first_evaluation.dig(:path, :expected_candidate_count).to_i,
+          recheck_raw_paths: recheck_context&.dig(:effective_file_paths),
           recheck_normalized_path: recheck_context&.dig(:normalized_path),
           recheck_canonical_path: recheck_context&.dig(:canonical_path),
+          recheck_canonical_paths: recheck_context&.dig(:canonical_paths),
+          recheck_path_set_ownership: recheck_context&.dig(:path_set_ownership),
+          recheck_mixed_path_sources: recheck_context&.dig(:mixed_path_sources),
+          recheck_candidate_paths: recheck_evaluation&.dig(:path, :candidate_paths),
           recheck_candidate_count: recheck_evaluation&.dig(:path, :candidate_count),
           recheck_expected_candidate_count: recheck_evaluation&.dig(:path, :expected_candidate_count)
         },
@@ -1928,13 +2135,64 @@ module Sync
       left.class.name == right.class.name && left.id == right.id
     end
 
+    def unique_watchables(watchables)
+      Array(watchables).compact.uniq { |watchable| [ watchable.class.name, watchable.id ] }
+    end
+
+    def effective_file_paths_for(row:, metadata:)
+      candidate_paths = [ row[:file_path] ]
+      candidate_paths.concat(Array(metadata&.fetch(:file_paths, nil)))
+      candidate_paths << metadata&.fetch(:file_path, nil)
+      candidate_paths.filter_map { |path| path.to_s.strip.presence }.uniq
+    end
+
+    def path_candidates_for(raw_paths:, canonical_mapper:, root_classifier:)
+      Array(raw_paths).filter_map do |raw_path|
+        canonical_path = canonical_path_for(raw_path: raw_path, canonical_mapper: canonical_mapper)
+        next if canonical_path.blank?
+
+        ownership = root_classifier.classify(canonical_path)
+        {
+          raw_path: raw_path,
+          canonical_path: canonical_path,
+          normalized_path: ownership[:normalized_path],
+          ownership: ownership[:ownership],
+          matched_managed_root: ownership[:matched_managed_root]
+        }
+      end
+    end
+
+    def selected_path_candidate_for(path_candidates:)
+      managed_candidate = Array(path_candidates).find { |candidate| candidate[:ownership] == "managed" }
+      managed_candidate || Array(path_candidates).first
+    end
+
+    def path_set_ownership_for(path_candidates:)
+      return nil if path_candidates.blank?
+      return "mixed" if mixed_path_sources?(path_candidates: path_candidates)
+
+      path_candidates.any? { |candidate| candidate[:ownership] == "managed" } ? "managed" : "external"
+    end
+
+    def mixed_path_sources?(path_candidates:)
+      managed_present = Array(path_candidates).any? { |candidate| candidate[:ownership] == "managed" }
+      external_present = Array(path_candidates).any? { |candidate| candidate[:ownership] == "external" }
+
+      managed_present && external_present
+    end
+
+    def external_only_path_set?(context:)
+      !context.fetch(:has_managed_path_candidate, false)
+    end
+
     def empty_path_result
       {
         canonical_path: nil,
         candidate_count: 0,
         expected_candidate_count: 0,
         unique_watchable: nil,
-        mismatch_present: false
+        mismatch_present: false,
+        candidate_paths: []
       }
     end
 

@@ -76,6 +76,7 @@ RSpec.describe "Api::V1::Integrations", type: :request do
                  sonarr_fetch_workers: 7,
                  radarr_moviefile_fetch_workers: 6,
                  tautulli_history_page_size: 1200,
+                 tautulli_library_mapping_page_size: 300,
                  tautulli_metadata_workers: 9
                }
              }
@@ -92,6 +93,7 @@ RSpec.describe "Api::V1::Integrations", type: :request do
         "radarr_moviefile_fetch_workers" => 6,
         "radarr_moviefile_fetch_workers_resolved" => 6,
         "tautulli_history_page_size" => 1200,
+        "tautulli_library_mapping_page_size" => 300,
         "tautulli_metadata_workers" => 9,
         "tautulli_metadata_workers_resolved" => 9
       )

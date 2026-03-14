@@ -62,16 +62,11 @@ module Integrations
       end
     end
 
-    def fetch_library_media_page(library_id:, start:, length:)
+    def fetch_library_media_page(start:, length:, library_id: nil, rating_key: nil)
       payload = request_json(
         method: :get,
         path: "api/v2",
-        params: base_api_params.merge(
-          cmd: LIBRARY_MEDIA_ENDPOINT,
-          section_id: library_id,
-          start: start,
-          length: length
-        )
+        params: library_media_params(library_id:, rating_key:, start:, length:)
       )
       data = response_data(payload)
       container = data.is_a?(Hash) ? data : {}
@@ -167,6 +162,7 @@ module Integrations
       {
         duration_ms: data["duration"]&.to_i,
         plex_guid: data["guid"],
+        file_paths: metadata_file_paths(data),
         file_path: file_path_signal[:value],
         external_ids: id_signals.transform_values { |signal| signal[:value] }.compact,
         provenance: metadata_provenance(file_path_signal:, id_signals:)
@@ -215,28 +211,81 @@ module Integrations
 
     def normalize_library_media_row(row, endpoint:)
       media_type = normalize_media_type(first_present(row, :media_type, :mediaType, :type, :library_type))
-      return nil unless %w[movie episode].include?(media_type)
-
       rating_key = first_present(row, :rating_key, :ratingKey)&.to_s&.presence
       file_path = first_present(row, :file, :file_path, :filePath, :path)&.to_s&.presence
       external_ids = external_ids_from_row(row)
-      return nil if rating_key.blank? && file_path.blank? && external_ids.blank?
+      plex_guid = first_present(row, :guid, :plex_guid)&.to_s&.presence
+      plex_parent_rating_key = first_present(row, :parent_rating_key, :parentRatingKey)&.to_s&.presence
+      plex_grandparent_rating_key = first_present(row, :grandparent_rating_key, :grandparentRatingKey)&.to_s&.presence
+      title = first_present(row, :title, :sort_title)&.to_s&.strip&.presence
+      year = integer_or_nil(first_present(row, :year))
+      plex_added_at = timestamp_from_unix(first_present(row, :added_at, :addedAt))
 
-      {
-        media_type: media_type,
-        plex_rating_key: rating_key,
-        plex_guid: first_present(row, :guid, :plex_guid)&.to_s&.presence,
-        plex_parent_rating_key: first_present(row, :parent_rating_key, :parentRatingKey)&.to_s&.presence,
-        plex_grandparent_rating_key: first_present(row, :grandparent_rating_key, :grandparentRatingKey)&.to_s&.presence,
-        season_number: integer_or_nil(first_present(row, :parent_media_index, :parentMediaIndex, :season_number, :seasonNumber)),
-        episode_number: integer_or_nil(first_present(row, :media_index, :mediaIndex, :episode_number, :episodeNumber)),
-        title: first_present(row, :title, :sort_title)&.to_s&.strip&.presence,
-        year: integer_or_nil(first_present(row, :year)),
-        plex_added_at: timestamp_from_unix(first_present(row, :added_at, :addedAt)),
-        file_path: file_path,
-        external_ids: external_ids,
-        provenance: discovery_provenance(endpoint:)
-      }.compact
+      case media_type
+      when "movie", "episode"
+        return nil if rating_key.blank? && file_path.blank? && external_ids.blank?
+
+        {
+          media_type: media_type,
+          plex_rating_key: rating_key,
+          plex_guid: plex_guid,
+          plex_parent_rating_key: plex_parent_rating_key,
+          plex_grandparent_rating_key: plex_grandparent_rating_key,
+          season_number: integer_or_nil(first_present(row, :parent_media_index, :parentMediaIndex, :season_number, :seasonNumber)),
+          episode_number: integer_or_nil(first_present(row, :media_index, :mediaIndex, :episode_number, :episodeNumber)),
+          title: title,
+          year: year,
+          plex_added_at: plex_added_at,
+          file_path: file_path,
+          external_ids: external_ids,
+          provenance: discovery_provenance(endpoint:)
+        }.compact
+      when "show"
+        return nil if rating_key.blank?
+
+        {
+          media_type: media_type,
+          plex_rating_key: rating_key,
+          plex_guid: plex_guid,
+          title: title,
+          year: year,
+          external_ids: external_ids,
+          provenance: discovery_provenance(endpoint:)
+        }.compact
+      when "season"
+        return nil if rating_key.blank?
+
+        {
+          media_type: media_type,
+          plex_rating_key: rating_key,
+          plex_guid: plex_guid,
+          plex_parent_rating_key: plex_parent_rating_key,
+          plex_grandparent_rating_key: plex_grandparent_rating_key,
+          season_number: integer_or_nil(first_present(row, :media_index, :mediaIndex, :season_number, :seasonNumber)),
+          title: title,
+          year: year,
+          plex_added_at: plex_added_at,
+          external_ids: external_ids,
+          provenance: discovery_provenance(endpoint:)
+        }.compact
+      end
+    end
+
+    def library_media_params(library_id:, rating_key:, start:, length:)
+      params = base_api_params.merge(
+        cmd: LIBRARY_MEDIA_ENDPOINT,
+        start: start,
+        length: length
+      )
+      if library_id.present?
+        params[:section_id] = library_id
+      elsif rating_key.present?
+        params[:rating_key] = rating_key
+      else
+        raise ArgumentError, "library_id or rating_key is required"
+      end
+
+      params
     end
 
     def history_id_from(row)
@@ -324,20 +373,19 @@ module Integrations
     end
 
     def metadata_file_path_signal(data)
-      raw_path = first_metadata_file_path(data)
-      normalized_path = raw_path.to_s.strip.presence
+      normalized_path = metadata_file_paths(data).first
       return none_signal_payload if normalized_path.blank?
 
       signal_payload(
         source: SOURCE_METADATA_MEDIA_INFO_PARTS_FILE,
-        raw: raw_path,
+        raw: normalized_path,
         normalized: normalized_path,
         value: normalized_path
       )
     end
 
-    def first_metadata_file_path(data)
-      Array(data["media_info"]).each do |media_info_row|
+    def metadata_file_paths(data)
+      Array(data["media_info"]).each_with_object([]) do |media_info_row, file_paths|
         next unless media_info_row.is_a?(Hash)
 
         Array(media_info_row["parts"]).each do |part_row|
@@ -346,11 +394,12 @@ module Integrations
           raw_path = part_row["file"]
           next unless raw_path.is_a?(String)
 
-          return raw_path if raw_path.to_s.strip.present?
+          normalized_path = raw_path.to_s.strip
+          next if normalized_path.blank?
+
+          file_paths << normalized_path unless file_paths.include?(normalized_path)
         end
       end
-
-      nil
     end
 
     def normalize_external_id(kind:, raw_value:)
@@ -418,6 +467,8 @@ module Integrations
       value = raw_value.to_s.downcase
       return "movie" if value.in?(%w[movie])
       return "episode" if value.in?(%w[episode])
+      return "show" if value.in?(%w[show series])
+      return "season" if value.in?(%w[season])
 
       nil
     end
