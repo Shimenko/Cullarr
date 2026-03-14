@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_03_14_034904) do
+ActiveRecord::Schema[8.1].define(version: 2026_03_14_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -129,6 +129,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_03_14_034904) do
     t.index ["integration_id"], name: "index_episodes_on_integration_id"
     t.index ["mapping_status_code"], name: "index_episodes_on_mapping_status_code"
     t.index ["plex_rating_key"], name: "index_episodes_on_plex_rating_key"
+    t.index ["season_id", "episode_number"], name: "index_episodes_on_season_id_and_episode_number"
     t.index ["season_id"], name: "index_episodes_on_season_id"
     t.index ["tmdb_id"], name: "index_episodes_on_tmdb_id"
     t.index ["tvdb_id"], name: "index_episodes_on_tvdb_id"

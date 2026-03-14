@@ -1300,6 +1300,209 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
     )
   end
 
+  it "preserves iterative hierarchical traversal emission order and counters" do
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Iterative Hierarchical Order",
+      base_url: "https://tautulli.iterative-hierarchical-order.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    sonarr = Integration.create!(
+      kind: "sonarr",
+      name: "Sonarr Iterative Hierarchical Order",
+      base_url: "https://sonarr.iterative-hierarchical-order.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    series_one = Series.create!(
+      integration: sonarr,
+      sonarr_series_id: 91_600,
+      title: "Iterative Order One"
+    )
+    season_one = Season.create!(series: series_one, season_number: 1)
+    episode_one = Episode.create!(
+      integration: sonarr,
+      season: season_one,
+      sonarr_episode_id: 91_611,
+      episode_number: 1,
+      tvdb_id: 916_001,
+      metadata_json: {}
+    )
+    episode_two = Episode.create!(
+      integration: sonarr,
+      season: season_one,
+      sonarr_episode_id: 91_612,
+      episode_number: 2,
+      tvdb_id: 916_002,
+      metadata_json: {}
+    )
+    series_two = Series.create!(
+      integration: sonarr,
+      sonarr_series_id: 91_700,
+      title: "Iterative Order Two"
+    )
+    season_two = Season.create!(series: series_two, season_number: 1)
+    episode_three = Episode.create!(
+      integration: sonarr,
+      season: season_two,
+      sonarr_episode_id: 91_713,
+      episode_number: 3,
+      tvdb_id: 917_003,
+      metadata_json: {}
+    )
+
+    persistence_order = []
+    diagnostics_and_persistence = Sync::TautulliLibraryMapping::DiagnosticsAndPersistence.new
+    allow(Sync::TautulliLibraryMapping::DiagnosticsAndPersistence).to receive(:new).and_return(diagnostics_and_persistence)
+    allow(diagnostics_and_persistence).to receive(:persist_resolution!).and_wrap_original do |method, resolution:, row:, diagnostics:|
+      persistence_order << row[:plex_rating_key]
+      method.call(resolution:, row:, diagnostics:)
+    end
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 89, title: "TV", section_type: "show" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 89, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "show",
+            plex_rating_key: "plex-show-order-1",
+            title: "Iterative Order One"
+          },
+          {
+            media_type: "show",
+            plex_rating_key: "plex-show-order-2",
+            title: "Iterative Order Two"
+          }
+        ],
+        raw_rows_count: 2,
+        rows_skipped_invalid: 0,
+        records_total: 2,
+        has_more: false,
+        next_start: 2
+      }
+    )
+    allow(adapter).to receive(:fetch_library_media_page).with(rating_key: "plex-show-order-1", start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "season",
+            plex_rating_key: "plex-season-order-1",
+            plex_parent_rating_key: "plex-show-order-1",
+            season_number: 1,
+            title: "Season 1"
+          },
+          {
+            media_type: "season",
+            plex_rating_key: nil,
+            plex_parent_rating_key: "plex-show-order-1",
+            season_number: 99,
+            title: "Broken Season"
+          }
+        ],
+        raw_rows_count: 2,
+        rows_skipped_invalid: 0,
+        records_total: 2,
+        has_more: false,
+        next_start: 2
+      }
+    )
+    allow(adapter).to receive(:fetch_library_media_page).with(rating_key: "plex-season-order-1", start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "episode",
+            plex_rating_key: "plex-episode-order-1",
+            plex_parent_rating_key: "plex-season-order-1",
+            plex_grandparent_rating_key: "plex-show-order-1",
+            season_number: 1,
+            episode_number: 1,
+            title: "Episode One",
+            external_ids: { tvdb_id: 916_001 }
+          },
+          {
+            media_type: "episode",
+            plex_rating_key: "plex-episode-order-2",
+            plex_parent_rating_key: "plex-season-order-1",
+            plex_grandparent_rating_key: "plex-show-order-1",
+            season_number: 1,
+            episode_number: 2,
+            title: "Episode Two",
+            external_ids: { tvdb_id: 916_002 }
+          }
+        ],
+        raw_rows_count: 2,
+        rows_skipped_invalid: 0,
+        records_total: 2,
+        has_more: false,
+        next_start: 2
+      }
+    )
+    allow(adapter).to receive(:fetch_library_media_page).with(rating_key: "plex-show-order-2", start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "season",
+            plex_rating_key: "plex-season-order-2",
+            plex_parent_rating_key: "plex-show-order-2",
+            season_number: 1,
+            title: "Season 1"
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+    allow(adapter).to receive(:fetch_library_media_page).with(rating_key: "plex-season-order-2", start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "episode",
+            plex_rating_key: "plex-episode-order-3",
+            plex_parent_rating_key: "plex-season-order-2",
+            plex_grandparent_rating_key: "plex-show-order-2",
+            season_number: 1,
+            episode_number: 3,
+            title: "Episode Three",
+            external_ids: { tvdb_id: 917_003 }
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-iterative-hierarchical-order").call
+
+    expect(persistence_order).to eq(
+      [
+        "plex-episode-order-1",
+        "plex-episode-order-2",
+        "plex-episode-order-3"
+      ]
+    )
+    expect(result).to include(
+      rows_fetched: 8,
+      rows_invalid: 1,
+      rows_processed: 3,
+      rows_mapped_by_external_ids: 3,
+      rows_unmapped: 0
+    )
+    expect(episode_one.reload.mapping_status_code).to eq("verified_external_ids")
+    expect(episode_two.reload.mapping_status_code).to eq("verified_external_ids")
+    expect(episode_three.reload.mapping_status_code).to eq("verified_external_ids")
+  end
+
   it "marks row-level recheck failed when show metadata succeeds but episode fallback is unusable" do
     tautulli = Integration.create!(
       kind: "tautulli",
@@ -1547,6 +1750,93 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
     expect(episode_by_path.mapping_status_code).to eq("ambiguous_conflict")
     expect(episode_by_path.mapping_diagnostics_json["conflict_reason"]).to eq("strong_signal_disagreement")
     expect(result).to include(rows_ambiguous: 1, rows_mapped_by_path: 0, rows_mapped_by_external_ids: 0)
+  end
+
+  it "uses targeted episode position lookups for tv structure matching" do
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli TV Position Lookup",
+      base_url: "https://tautulli.tv-position-lookup.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    sonarr = Integration.create!(
+      kind: "sonarr",
+      name: "Sonarr TV Position Lookup",
+      base_url: "https://sonarr.tv-position-lookup.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+    series = Series.create!(
+      integration: sonarr,
+      sonarr_series_id: 92_100,
+      title: "TV Position Lookup",
+      plex_rating_key: "plex-position-show"
+    )
+    season_one = Season.create!(series:, season_number: 1)
+    season_two = Season.create!(series:, season_number: 2)
+    target_episode = Episode.create!(
+      integration: sonarr,
+      season: season_one,
+      sonarr_episode_id: 92_112,
+      episode_number: 12,
+      metadata_json: {}
+    )
+    Episode.create!(
+      integration: sonarr,
+      season: season_two,
+      sonarr_episode_id: 92_201,
+      episode_number: 1,
+      metadata_json: {}
+    )
+
+    episode_where_conditions = []
+    allow(Episode).to receive(:where).and_wrap_original do |method, *args|
+      episode_where_conditions << args.first if args.first.is_a?(Hash)
+      method.call(*args)
+    end
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 90, title: "TV", section_type: "show" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 90, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "episode",
+            plex_rating_key: "plex-position-episode",
+            plex_parent_rating_key: "plex-position-season",
+            plex_grandparent_rating_key: "plex-position-show",
+            season_number: 1,
+            episode_number: 12,
+            title: "Target Episode",
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-tv-position-lookup").call
+
+    expect(
+      episode_where_conditions.any? do |conditions|
+        conditions[:season_id] == season_one.id && conditions[:episode_number] == 12
+      end
+    ).to be(true)
+    expect(
+      episode_where_conditions.any? do |conditions|
+        conditions[:season_id].is_a?(Array) && conditions[:episode_number].blank?
+      end
+    ).to be(false)
+    expect(result).to include(status_verified_tv_structure: 1, rows_unmapped: 0)
+    expect(target_episode.reload.mapping_status_code).to eq("verified_tv_structure")
   end
 
   it "fails closed with strong_signal_disagreement when external ids and tv structure resolve different episodes" do
