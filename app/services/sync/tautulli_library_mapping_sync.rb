@@ -44,21 +44,46 @@ module Sync
 
       log_info("sync_phase_worker_started phase=tautulli_library_mapping")
       Integration.tautulli.find_each do |integration|
+        telemetry = Sync::TautulliLibraryMapping::Telemetry.new
+        integration_started_at = monotonic_now
+
         Integrations::HealthCheck.new(integration, raise_on_unsupported: true).call
         counts[:integrations] += 1
 
         adapter = Integrations::TautulliAdapter.new(integration:)
         libraries = adapter.fetch_libraries
         counts[:libraries_fetched] += libraries.size
+        last_run_telemetry = nil
 
         discovery = Sync::TautulliLibraryMapping::DiscoveryTraversal.new(
           integration: integration,
           adapter: adapter,
           libraries: libraries,
+          telemetry: telemetry,
+          last_run_telemetry_builder: lambda { |profile:, rows_fetched:, rows_processed:|
+            last_run_telemetry = telemetry.last_run_telemetry_payload(
+              profile: profile,
+              rows_fetched: rows_fetched,
+              rows_processed: rows_processed,
+              duration_ms: elapsed_ms_since(integration_started_at)
+            )
+          },
           phase_progress: phase_progress,
-          row_processor: ->(staged_rows) { batch_matcher_for(integration:, adapter:, profile: discovery.profile).process(staged_rows:) }
+          row_processor: lambda { |staged_rows|
+            batch_matcher_for(
+              integration: integration,
+              adapter: adapter,
+              profile: discovery.profile,
+              telemetry: telemetry
+            ).process(staged_rows:)
+          }
         )
         integration_counts = discovery.call
+        mapping_total_duration_ms = last_run_telemetry.fetch("duration_ms").to_i
+        merge_counts!(
+          integration_counts,
+          telemetry.phase_counts_payload(mapping_total_duration_ms:)
+        )
         merge_counts!(counts, integration_counts)
 
         log_info(
@@ -73,7 +98,8 @@ module Sync
           "profile_scheduled_integrations=#{integration_counts[:profile_scheduled_integrations]} " \
           "watchables_updated=#{integration_counts[:watchables_updated]} " \
           "watchables_unchanged=#{integration_counts[:watchables_unchanged]} " \
-          "state_updates=#{integration_counts[:state_updates]}"
+          "state_updates=#{integration_counts[:state_updates]} " \
+          "telemetry=#{last_run_telemetry.to_json}"
         )
       end
 
@@ -85,16 +111,17 @@ module Sync
 
     attr_reader :correlation_id, :phase_progress, :sync_run
 
-    def batch_matcher_for(integration:, adapter:, profile:)
+    def batch_matcher_for(integration:, adapter:, profile:, telemetry:)
       @batch_matchers ||= {}
       @batch_matchers.fetch(integration.id) do
         @batch_matchers[integration.id] = Sync::TautulliLibraryMapping::BatchMatcher.new(
           integration: integration,
           adapter: adapter,
           profile: profile,
+          telemetry: telemetry,
           phase_progress: phase_progress,
-          tv_structure_resolver: Sync::TautulliLibraryMapping::TvStructureResolver.new,
-          diagnostics_and_persistence: Sync::TautulliLibraryMapping::DiagnosticsAndPersistence.new
+          tv_structure_resolver: Sync::TautulliLibraryMapping::TvStructureResolver.new(telemetry: telemetry),
+          diagnostics_and_persistence: Sync::TautulliLibraryMapping::DiagnosticsAndPersistence.new(telemetry: telemetry)
         )
       end
     end
@@ -113,6 +140,14 @@ module Sync
           "correlation_id=#{correlation_id}"
         ].join(" ")
       )
+    end
+
+    def elapsed_ms_since(started_at)
+      ((monotonic_now - started_at) * 1000).round
+    end
+
+    def monotonic_now
+      Process.clock_gettime(Process::CLOCK_MONOTONIC)
     end
   end
 end

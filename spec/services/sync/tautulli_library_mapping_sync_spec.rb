@@ -4,7 +4,20 @@ require "rails_helper"
 RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
   let(:sync_run) { SyncRun.create!(status: "running", trigger: "manual") }
 
+  def stub_monotonic_clock!(start: 1000.0, step: 0.005)
+    current = start - step
+    allow(Process).to receive(:clock_gettime).and_wrap_original do |method, clock_id, *args|
+      if clock_id == Process::CLOCK_MONOTONIC
+        current += step
+      else
+        method.call(clock_id, *args)
+      end
+    end
+  end
+
   it "maps watchables by canonical file path and persists library mapping state" do
+    stub_monotonic_clock!
+
     tautulli = Integration.create!(
       kind: "tautulli",
       name: "Tautulli Mapping",
@@ -88,6 +101,22 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
     expect(state["last_run_at"]).to be_present
     expect(state.dig("libraries", "10", "next_start")).to eq(0)
     expect(state.dig("libraries", "10", "completed_cycle_count")).to eq(1)
+    expect(result[:mapping_total_duration_ms]).to be > 0
+    expect(result[:discovery_duration_ms]).to be > 0
+    expect(result[:persistence_duration_ms]).to be > 0
+    expect(state.fetch("last_run_telemetry")).to include(
+      "profile" => "bootstrap",
+      "rows_fetched" => 1,
+      "rows_processed" => 1
+    )
+    expect(state.dig("last_run_telemetry", "discovery")).to include(
+      "library_page_calls" => 1,
+      "tv_child_page_calls" => 0,
+      "tv_show_expansions" => 0,
+      "tv_season_expansions" => 0,
+      "tv_rows_emitted" => 0
+    )
+    expect(state.dig("last_run_telemetry", "persistence", "duration_ms")).to be > 0
   end
 
   it "falls back to external ids when path data is unavailable" do
@@ -1040,6 +1069,8 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
   end
 
   it "resolves episodes through show-first structure and keeps episode fallback below baseline" do
+    stub_monotonic_clock!
+
     tautulli = Integration.create!(
       kind: "tautulli",
       name: "Tautulli TV Show-First Baseline",
@@ -1171,6 +1202,14 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
       enrichment_show_get_metadata_attempted: 1,
       enrichment_show_get_metadata_skipped: 1,
       enrichment_show_get_metadata_failed: 0,
+      recheck_show_metadata_cache_hits: 1,
+      recheck_show_metadata_cache_misses: 1,
+      tv_structure_series_external_id_queries: 1,
+      tv_structure_series_external_id_cache_hits: 1,
+      tv_structure_season_queries: 1,
+      tv_structure_season_cache_hits: 1,
+      tv_structure_episode_queries: 2,
+      tv_structure_episode_cache_hits: 0,
       enrichment_episode_fallback_get_metadata_attempted: 0,
       enrichment_episode_fallback_get_metadata_skipped: 0,
       enrichment_episode_fallback_get_metadata_failed: 0
@@ -1180,6 +1219,8 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
   end
 
   it "expands hierarchical tv discovery rows from show to season to episode before mapping" do
+    stub_monotonic_clock!
+
     tautulli = Integration.create!(
       kind: "tautulli",
       name: "Tautulli Hierarchical TV Discovery",
@@ -1295,9 +1336,15 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
       rows_processed: 1,
       status_verified_tv_structure: 1,
       rows_unmapped: 0,
+      discovery_library_page_calls: 1,
+      discovery_tv_child_page_calls: 2,
+      discovery_tv_show_expansions: 1,
+      discovery_tv_season_expansions: 1,
+      discovery_tv_rows_emitted: 1,
       enrichment_show_get_metadata_attempted: 1,
       enrichment_episode_fallback_get_metadata_attempted: 0
     )
+    expect(result[:discovery_duration_ms]).to be > 0
   end
 
   it "preserves iterative hierarchical traversal emission order and counters" do
@@ -1752,7 +1799,7 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
     expect(result).to include(rows_ambiguous: 1, rows_mapped_by_path: 0, rows_mapped_by_external_ids: 0)
   end
 
-  it "uses targeted episode position lookups for tv structure matching" do
+  it "uses targeted episode position lookups and caches repeated tv structure resolution" do
     tautulli = Integration.create!(
       kind: "tautulli",
       name: "Tautulli TV Position Lookup",
@@ -1813,13 +1860,23 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
             episode_number: 12,
             title: "Target Episode",
             external_ids: {}
+          },
+          {
+            media_type: "episode",
+            plex_rating_key: "plex-position-episode",
+            plex_parent_rating_key: "plex-position-season",
+            plex_grandparent_rating_key: "plex-position-show",
+            season_number: 1,
+            episode_number: 12,
+            title: "Target Episode Duplicate",
+            external_ids: {}
           }
         ],
-        raw_rows_count: 1,
+        raw_rows_count: 2,
         rows_skipped_invalid: 0,
-        records_total: 1,
+        records_total: 2,
         has_more: false,
-        next_start: 1
+        next_start: 2
       }
     )
 
@@ -1835,7 +1892,16 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
         conditions[:season_id].is_a?(Array) && conditions[:episode_number].blank?
       end
     ).to be(false)
-    expect(result).to include(status_verified_tv_structure: 1, rows_unmapped: 0)
+    expect(result).to include(
+      status_verified_tv_structure: 2,
+      rows_unmapped: 0,
+      tv_structure_series_rating_key_queries: 1,
+      tv_structure_series_rating_key_cache_hits: 1,
+      tv_structure_season_queries: 1,
+      tv_structure_season_cache_hits: 1,
+      tv_structure_episode_queries: 1,
+      tv_structure_episode_cache_hits: 1
+    )
     expect(target_episode.reload.mapping_status_code).to eq("verified_tv_structure")
   end
 
@@ -2308,6 +2374,8 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
       metadata_recheck_attempted: 1,
       metadata_recheck_skipped: 1,
       metadata_recheck_failed: 0,
+      recheck_watchable_metadata_cache_hits: 1,
+      recheck_watchable_metadata_cache_misses: 1,
       enrichment_watchable_get_metadata_attempted: 1,
       enrichment_watchable_get_metadata_skipped: 1,
       enrichment_watchable_get_metadata_failed: 0,
@@ -2684,6 +2752,7 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
       metadata_recheck_attempted: 1,
       metadata_recheck_skipped: 1,
       metadata_recheck_failed: 1,
+      recheck_budget_exhausted_rows: 1,
       enrichment_watchable_get_metadata_attempted: 1,
       enrichment_watchable_get_metadata_skipped: 1,
       enrichment_watchable_get_metadata_failed: 1,

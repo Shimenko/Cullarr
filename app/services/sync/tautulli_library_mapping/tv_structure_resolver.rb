@@ -1,7 +1,8 @@
 module Sync
   module TautulliLibraryMapping
     class TvStructureResolver
-      def initialize
+      def initialize(telemetry: Sync::TautulliLibraryMapping::Telemetry.new)
+        @telemetry = telemetry
         @series_by_rating_key_cache = {}
         @series_by_external_id_cache = {}
         @season_lookup_cache = {}
@@ -9,6 +10,16 @@ module Sync
       end
 
       def resolve_tv_structure_candidates(context:, integration:)
+        telemetry.measure_tv_structure do
+          perform_resolve_tv_structure_candidates(context:, integration:)
+        end
+      end
+
+      private
+
+      attr_reader :telemetry
+
+      def perform_resolve_tv_structure_candidates(context:, integration:)
         return empty_tv_structure_result unless context.fetch(:media_type) == "episode"
 
         season_episode_keys = {
@@ -102,8 +113,6 @@ module Sync
         }
       end
 
-      private
-
       def resolve_show_identity_for_tv_structure(context:, integration:)
         show_rating_key = context[:plex_grandparent_rating_key].to_s.strip.presence
         show_external_ids = context.fetch(:show_external_ids, {})
@@ -187,9 +196,13 @@ module Sync
         return [] if normalized_key.blank?
 
         cache_key = [ integration_id, normalized_key ]
-        @series_by_rating_key_cache.fetch(cache_key) do
-          @series_by_rating_key_cache[cache_key] = Series.where(plex_rating_key: normalized_key).to_a
+        if @series_by_rating_key_cache.key?(cache_key)
+          telemetry.increment_tv_structure_cache_hit(:series_rating_key)
+          return @series_by_rating_key_cache[cache_key]
         end
+
+        telemetry.increment_tv_structure_query(:series_rating_key)
+        @series_by_rating_key_cache[cache_key] = Series.where(plex_rating_key: normalized_key).to_a
       end
 
       def series_candidates_for_show_external_ids(show_external_ids:)
@@ -201,13 +214,17 @@ module Sync
           normalized_ids[:imdb_id],
           normalized_ids[:tmdb_id]
         ]
-        @series_by_external_id_cache.fetch(cache_key) do
-          candidates = Series.none
-          candidates = candidates.or(Series.where(tvdb_id: normalized_ids[:tvdb_id])) if normalized_ids[:tvdb_id].present?
-          candidates = candidates.or(Series.where(imdb_id: normalized_ids[:imdb_id])) if normalized_ids[:imdb_id].present?
-          candidates = candidates.or(Series.where(tmdb_id: normalized_ids[:tmdb_id])) if normalized_ids[:tmdb_id].present?
-          @series_by_external_id_cache[cache_key] = candidates.to_a.uniq(&:id)
+        if @series_by_external_id_cache.key?(cache_key)
+          telemetry.increment_tv_structure_cache_hit(:series_external_id)
+          return @series_by_external_id_cache[cache_key]
         end
+
+        telemetry.increment_tv_structure_query(:series_external_id)
+        candidates = Series.none
+        candidates = candidates.or(Series.where(tvdb_id: normalized_ids[:tvdb_id])) if normalized_ids[:tvdb_id].present?
+        candidates = candidates.or(Series.where(imdb_id: normalized_ids[:imdb_id])) if normalized_ids[:imdb_id].present?
+        candidates = candidates.or(Series.where(tmdb_id: normalized_ids[:tmdb_id])) if normalized_ids[:tmdb_id].present?
+        @series_by_external_id_cache[cache_key] = candidates.to_a.uniq(&:id)
       end
 
       def tv_episode_candidates_for(series:, season_number:, episode_number:)
@@ -215,22 +232,30 @@ module Sync
         return [] if season.blank?
 
         episode_cache_key = [ season.id, episode_number.to_i ]
-        @episode_lookup_cache.fetch(episode_cache_key) do
-          @episode_lookup_cache[episode_cache_key] = Episode.where(
-            season_id: season.id,
-            episode_number: episode_number.to_i
-          ).to_a
+        if @episode_lookup_cache.key?(episode_cache_key)
+          telemetry.increment_tv_structure_cache_hit(:episode)
+          return @episode_lookup_cache[episode_cache_key]
         end
+
+        telemetry.increment_tv_structure_query(:episode)
+        @episode_lookup_cache[episode_cache_key] = Episode.where(
+          season_id: season.id,
+          episode_number: episode_number.to_i
+        ).to_a
       end
 
       def season_for_series(series_id:, season_number:)
         cache_key = [ series_id, season_number.to_i ]
-        @season_lookup_cache.fetch(cache_key) do
-          @season_lookup_cache[cache_key] = Season.where(
-            series_id: series_id,
-            season_number: season_number.to_i
-          ).first
+        if @season_lookup_cache.key?(cache_key)
+          telemetry.increment_tv_structure_cache_hit(:season)
+          return @season_lookup_cache[cache_key]
         end
+
+        telemetry.increment_tv_structure_query(:season)
+        @season_lookup_cache[cache_key] = Season.where(
+          series_id: series_id,
+          season_number: season_number.to_i
+        ).first
       end
 
       def empty_tv_structure_result

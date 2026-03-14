@@ -98,7 +98,39 @@ RSpec.describe Integration, type: :model do
         libraries_count: 2,
         active_cursors_count: 1,
         completed_cycles: 3,
-        last_run_at: "2026-02-11T10:00:00Z"
+        last_run_at: "2026-02-11T10:00:00Z",
+        last_run_telemetry: nil
+      }
+    )
+  end
+
+  it "serializes additive mapping last-run telemetry in api payload" do
+    integration = described_class.create!(
+      kind: "tautulli",
+      name: "Tautulli Mapping Telemetry",
+      base_url: "https://tautulli.mapping-telemetry.local",
+      api_key: "secret-key",
+      verify_ssl: true,
+      settings_json: {
+        "library_mapping_state" => {
+          "last_run_at" => "2026-03-14T10:00:00Z",
+          "libraries" => {
+            "1" => { "next_start" => 0, "completed_cycle_count" => 4 }
+          },
+          "last_run_telemetry" => expected_last_run_telemetry_payload
+        }
+      }
+    )
+
+    payload = integration.as_api_json
+    expect(payload[:tautulli_library_mapping_state]).to eq(
+      {
+        present: true,
+        libraries_count: 1,
+        active_cursors_count: 0,
+        completed_cycles: 4,
+        last_run_at: "2026-03-14T10:00:00Z",
+        last_run_telemetry: expected_last_run_telemetry_payload.deep_symbolize_keys
       }
     )
   end
@@ -192,6 +224,45 @@ RSpec.describe Integration, type: :model do
     expect(integration.read_attribute_before_type_cast("api_key_ciphertext")).not_to eq(old_ciphertext)
   ensure
     ActiveRecord::Encryption.config.primary_key = original_primary_keys
+  end
+
+  def expected_last_run_telemetry_payload
+    {
+      "profile" => "bootstrap",
+      "rows_fetched" => 3,
+      "rows_processed" => 2,
+      "duration_ms" => 123,
+      "discovery" => {
+        "duration_ms" => 17,
+        "library_page_calls" => 2,
+        "tv_child_page_calls" => 1,
+        "tv_show_expansions" => 1,
+        "tv_season_expansions" => 0,
+        "tv_rows_emitted" => 2
+      },
+      "metadata_recheck" => {
+        "duration_ms" => 19,
+        "watchable_cache_hits" => 4,
+        "watchable_cache_misses" => 5,
+        "show_cache_hits" => 6,
+        "show_cache_misses" => 7,
+        "budget_exhausted_rows" => 1
+      },
+      "tv_structure" => {
+        "duration_ms" => 23,
+        "series_rating_key_queries" => 1,
+        "series_external_id_queries" => 2,
+        "season_queries" => 3,
+        "episode_queries" => 4,
+        "series_rating_key_cache_hits" => 5,
+        "series_external_id_cache_hits" => 6,
+        "season_cache_hits" => 7,
+        "episode_cache_hits" => 8
+      },
+      "persistence" => {
+        "duration_ms" => 29
+      }
+    }
   end
 end
 # rubocop:enable RSpec/ExampleLength, RSpec/MultipleExpectations

@@ -1,9 +1,15 @@
 module Sync
   module TautulliLibraryMapping
     class MetadataRechecker
-      def initialize(adapter:, integration:, profile:)
+      def initialize(
+        adapter:,
+        integration:,
+        profile:,
+        telemetry: Sync::TautulliLibraryMapping::Telemetry.new
+      )
         @adapter = adapter
         @integration = integration
+        @telemetry = telemetry
         @recheck_metadata_cache = {}
         @recheck_show_metadata_cache = {}
         @limited_budget = profile == :scheduled
@@ -11,6 +17,32 @@ module Sync
       end
 
       def recheck_outcome_for(
+        row:,
+        first_evaluation:,
+        canonical_mapper:,
+        root_classifier:,
+        context_builder:,
+        context_evaluator:
+      )
+        telemetry.measure_metadata_recheck do
+          result = perform_recheck_outcome_for(
+            row: row,
+            first_evaluation: first_evaluation,
+            canonical_mapper: canonical_mapper,
+            root_classifier: root_classifier,
+            context_builder: context_builder,
+            context_evaluator: context_evaluator
+          )
+          telemetry.increment_recheck_budget_exhausted_rows if result[:reason] == "recheck_skipped_scheduled_recheck_budget"
+          result
+        end
+      end
+
+      private
+
+      attr_reader :adapter, :integration, :telemetry
+
+      def perform_recheck_outcome_for(
         row:,
         first_evaluation:,
         canonical_mapper:,
@@ -92,10 +124,6 @@ module Sync
           evaluation: evaluation
         }
       end
-
-      private
-
-      attr_reader :adapter, :integration
 
       def tv_episode_recheck_outcome_for(row:, canonical_mapper:, root_classifier:, context_builder:, context_evaluator:)
         metadata_call_issued = false
@@ -216,12 +244,14 @@ module Sync
       def fetch_recheck_metadata_result(rating_key:)
         cached = @recheck_metadata_cache[rating_key]
         unless cached.nil?
+          telemetry.increment_watchable_metadata_cache_hit
           return {
             metadata: cached == :unusable ? nil : cached,
             call_issued: false,
             budget_exhausted: false
           }
         end
+        telemetry.increment_watchable_metadata_cache_miss
 
         unless consume_recheck_budget_call!
           return {
@@ -251,12 +281,14 @@ module Sync
         cache_key = [ integration.id, normalized_key ]
         cached = @recheck_show_metadata_cache[cache_key]
         unless cached.nil?
+          telemetry.increment_show_metadata_cache_hit
           return {
             metadata: cached == :unusable ? nil : cached,
             call_issued: false,
             budget_exhausted: false
           }
         end
+        telemetry.increment_show_metadata_cache_miss
 
         unless consume_recheck_budget_call!
           return {

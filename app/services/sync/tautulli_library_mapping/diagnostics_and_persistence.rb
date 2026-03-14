@@ -1,6 +1,10 @@
 module Sync
   module TautulliLibraryMapping
     class DiagnosticsAndPersistence
+      def initialize(telemetry: Sync::TautulliLibraryMapping::Telemetry.new)
+        @telemetry = telemetry
+      end
+
       def mapping_diagnostics_for(row:, first_context:, first_evaluation:, recheck_outcome:, final_resolution:)
         recheck_context = recheck_outcome[:context]
         recheck_evaluation = recheck_outcome[:evaluation]
@@ -86,6 +90,16 @@ module Sync
       end
 
       def persist_resolution!(resolution:, row:, diagnostics:)
+        telemetry.measure_persistence do
+          perform_persist_resolution!(resolution:, row:, diagnostics:)
+        end
+      end
+
+      private
+
+      attr_reader :telemetry
+
+      def perform_persist_resolution!(resolution:, row:, diagnostics:)
         watchable = resolution[:selected_watchable]
         return :unmapped if watchable.blank?
 
@@ -96,9 +110,7 @@ module Sync
 
         if incoming_rating_key.present?
           existing_rating_key = watchable.plex_rating_key.to_s.strip.presence
-          if existing_rating_key.blank? || resolution[:allow_overwrite_rating_key]
-            attrs[:plex_rating_key] = incoming_rating_key
-          end
+          attrs[:plex_rating_key] = incoming_rating_key if existing_rating_key.blank? || resolution[:allow_overwrite_rating_key]
         end
 
         if incoming_guid.present?
@@ -118,8 +130,6 @@ module Sync
 
         persist_watchable_changes!(watchable:, attrs:)
       end
-
-      private
 
       def tv_structure_diagnostics_payload(tv_structure)
         value = tv_structure.is_a?(Hash) ? tv_structure.deep_dup : {}

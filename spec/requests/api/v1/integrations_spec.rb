@@ -38,6 +38,43 @@ RSpec.describe "Api::V1::Integrations", type: :request do
       expect(response).to have_http_status(:ok)
       expect(response.parsed_body.fetch("integrations").size).to eq(1)
     end
+
+    it "exposes additive mapping last-run telemetry without changing cursor summary keys" do
+      sign_in_operator!
+      Integration.create!(
+        kind: "tautulli",
+        name: "Tautulli Mapping Telemetry",
+        base_url: "https://tautulli.mapping-telemetry.local",
+        api_key: "secret",
+        verify_ssl: true,
+        settings_json: {
+          "library_mapping_state" => {
+            "last_run_at" => "2026-03-14T12:00:00Z",
+            "libraries" => {
+              "10" => {
+                "next_start" => 250,
+                "completed_cycle_count" => 2
+              }
+            },
+            "last_run_telemetry" => expected_last_run_telemetry_payload
+          }
+        }
+      )
+
+      get "/api/v1/integrations", as: :json
+
+      payload = response.parsed_body.fetch("integrations").find { |row| row.fetch("kind") == "tautulli" }
+      expect(payload.fetch("tautulli_library_mapping_state")).to eq(
+        {
+          "present" => true,
+          "libraries_count" => 1,
+          "active_cursors_count" => 1,
+          "completed_cycles" => 2,
+          "last_run_at" => "2026-03-14T12:00:00Z",
+          "last_run_telemetry" => expected_last_run_telemetry_payload
+        }
+      )
+    end
   end
 
   describe "POST /api/v1/integrations" do
@@ -366,6 +403,45 @@ RSpec.describe "Api::V1::Integrations", type: :request do
         "history state reset is only available for tautulli integrations"
       )
     end
+  end
+
+  def expected_last_run_telemetry_payload
+    {
+      "profile" => "scheduled",
+      "rows_fetched" => 11,
+      "rows_processed" => 7,
+      "duration_ms" => 210,
+      "discovery" => {
+        "duration_ms" => 40,
+        "library_page_calls" => 2,
+        "tv_child_page_calls" => 5,
+        "tv_show_expansions" => 2,
+        "tv_season_expansions" => 3,
+        "tv_rows_emitted" => 7
+      },
+      "metadata_recheck" => {
+        "duration_ms" => 55,
+        "watchable_cache_hits" => 1,
+        "watchable_cache_misses" => 4,
+        "show_cache_hits" => 2,
+        "show_cache_misses" => 3,
+        "budget_exhausted_rows" => 1
+      },
+      "tv_structure" => {
+        "duration_ms" => 65,
+        "series_rating_key_queries" => 1,
+        "series_external_id_queries" => 2,
+        "season_queries" => 3,
+        "episode_queries" => 4,
+        "series_rating_key_cache_hits" => 5,
+        "series_external_id_cache_hits" => 6,
+        "season_cache_hits" => 7,
+        "episode_cache_hits" => 8
+      },
+      "persistence" => {
+        "duration_ms" => 50
+      }
+    }
   end
 end
 # rubocop:enable RSpec/ExampleLength

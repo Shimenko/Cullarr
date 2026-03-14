@@ -3,6 +3,7 @@ module Sync
     class DiscoveryTraversal
       def self.counts_template
         Sync::TautulliLibraryMapping::BatchMatcher.counts_template.merge(
+          Sync::TautulliLibraryMapping::Telemetry.phase_counts_template,
           profile_bootstrap_integrations: 0,
           profile_scheduled_integrations: 0,
           rows_fetched: 0,
@@ -13,16 +14,34 @@ module Sync
 
       attr_reader :profile
 
-      def initialize(integration:, adapter:, libraries:, phase_progress: nil, row_processor:)
+      def initialize(
+        integration:,
+        adapter:,
+        libraries:,
+        telemetry: Sync::TautulliLibraryMapping::Telemetry.new,
+        last_run_telemetry_builder: nil,
+        phase_progress: nil,
+        row_processor:
+      )
         @integration = integration
         @adapter = adapter
         @libraries = libraries
+        @telemetry = telemetry
+        @last_run_telemetry_builder = last_run_telemetry_builder
         @phase_progress = phase_progress
         @row_processor = row_processor
         @profile = mapping_run_profile_for(integration)
       end
 
       def call
+        perform_call
+      end
+
+      private
+
+      attr_reader :adapter, :integration, :last_run_telemetry_builder, :libraries, :phase_progress, :row_processor, :telemetry
+
+      def perform_call
         counts = self.class.counts_template
         counts[profile_counter_key_for(profile)] += 1
 
@@ -67,37 +86,24 @@ module Sync
             end
             break if page_length <= 0
 
-            page = discovery_page_for(
+            discovered_page = discover_page(
               library: library,
               start: start_offset,
-              length: page_length
+              length: page_length,
+              discovery_sequence: discovery_sequence,
+              staged_rows: staged_rows
             )
-            fetched_rows = page.fetch(:raw_rows_count, 0).to_i
-            rows = page.fetch(:rows)
+            page = discovered_page.fetch(:page)
+            fetched_rows = discovered_page.fetch(:fetched_rows)
+            discovery_sequence = discovered_page.fetch(:next_discovery_sequence)
 
-            phase_progress&.add_total!(fetched_rows + rows.size)
+            phase_progress&.add_total!(fetched_rows + discovered_page.fetch(:row_count))
             phase_progress&.advance!(fetched_rows)
 
             counts[:rows_fetched] += fetched_rows
-            counts[:rows_invalid] += page.fetch(:rows_skipped_invalid, 0).to_i
+            counts[:rows_invalid] += discovered_page.fetch(:rows_invalid)
 
-            page_staged_rows = []
-            rows.each do |row|
-              staged_row = {
-                row: row,
-                discovery_sequence: discovery_sequence
-              }
-              if scheduled_profile?(profile)
-                staged_rows << staged_row
-              else
-                page_staged_rows << staged_row
-              end
-              discovery_sequence += 1
-            end
-
-            if bootstrap_profile?(profile)
-              merge_counts!(counts, row_processor.call(page_staged_rows))
-            end
+            merge_counts!(counts, row_processor.call(discovered_page.fetch(:page_staged_rows))) if bootstrap_profile?(profile)
 
             discovery_budget_remaining -= fetched_rows if scheduled_profile?(profile)
 
@@ -125,11 +131,16 @@ module Sync
         merge_counts!(counts, row_processor.call(staged_rows)) if scheduled_profile?(profile)
 
         state["last_run_at"] = Time.current.iso8601
+        if last_run_telemetry_builder
+          state["last_run_telemetry"] = last_run_telemetry_builder.call(
+            profile: profile,
+            rows_fetched: counts[:rows_fetched],
+            rows_processed: counts[:rows_processed]
+          )
+        end
         state_changed = true
 
-        if bootstrap_profile?(profile) && bootstrap_cycle_completed
-          bootstrap_completed_at = Time.current.iso8601
-        end
+        bootstrap_completed_at = Time.current.iso8601 if bootstrap_profile?(profile) && bootstrap_cycle_completed
 
         marker_changed = persisted_bootstrap_completed_at != bootstrap_completed_at
         if state_changed || marker_changed
@@ -144,10 +155,6 @@ module Sync
         counts
       end
 
-      private
-
-      attr_reader :adapter, :integration, :libraries, :phase_progress, :row_processor
-
       def library_supported_for_mapping?(library)
         !library.fetch(:section_type).to_s.in?(%w[artist])
       end
@@ -160,7 +167,7 @@ module Sync
             length: length
           )
         else
-          adapter.fetch_library_media_page(
+          fetch_library_media_page_for_library(
             library_id: library.fetch(:library_id),
             start: start,
             length: length
@@ -169,7 +176,7 @@ module Sync
       end
 
       def tv_discovery_page_for(library_id:, start:, length:)
-        page = adapter.fetch_library_media_page(
+        page = fetch_library_media_page_for_library(
           library_id: library_id,
           start: start,
           length: length
@@ -197,12 +204,16 @@ module Sync
             case row[:media_type].to_s
             when "episode", "movie"
               rows << row
+              telemetry.increment_discovery_tv_rows_emitted
             when "show", "season"
               rating_key = row[:plex_rating_key].to_s.strip.presence
               if rating_key.blank?
                 rows_skipped_invalid += 1
                 next
               end
+
+              telemetry.increment_discovery_tv_show_expansions if row[:media_type].to_s == "show"
+              telemetry.increment_discovery_tv_season_expansions if row[:media_type].to_s == "season"
 
               traversal_stack << {
                 frame_type: :page,
@@ -216,7 +227,7 @@ module Sync
             next
           end
 
-          child_page = adapter.fetch_library_media_page(
+          child_page = fetch_library_media_page_for_child(
             rating_key: frame.fetch(:rating_key),
             start: frame.fetch(:start),
             length: length
@@ -250,6 +261,59 @@ module Sync
           has_more: page.fetch(:has_more),
           next_start: page.fetch(:next_start)
         }
+      end
+
+      def discover_page(library:, start:, length:, discovery_sequence:, staged_rows:)
+        telemetry.measure_discovery do
+          page = discovery_page_for(
+            library: library,
+            start: start,
+            length: length
+          )
+          page_rows = page.fetch(:rows)
+          page_staged_rows = []
+          next_discovery_sequence = discovery_sequence
+
+          page_rows.each do |row|
+            staged_row = {
+              row: row,
+              discovery_sequence: next_discovery_sequence
+            }
+            if scheduled_profile?(profile)
+              staged_rows << staged_row
+            else
+              page_staged_rows << staged_row
+            end
+            next_discovery_sequence += 1
+          end
+
+          {
+            page: page,
+            page_staged_rows: page_staged_rows,
+            fetched_rows: page.fetch(:raw_rows_count, 0).to_i,
+            row_count: page_rows.size,
+            rows_invalid: page.fetch(:rows_skipped_invalid, 0).to_i,
+            next_discovery_sequence: next_discovery_sequence
+          }
+        end
+      end
+
+      def fetch_library_media_page_for_library(library_id:, start:, length:)
+        telemetry.increment_discovery_library_page_calls
+        adapter.fetch_library_media_page(
+          library_id: library_id,
+          start: start,
+          length: length
+        )
+      end
+
+      def fetch_library_media_page_for_child(rating_key:, start:, length:)
+        telemetry.increment_discovery_tv_child_page_calls
+        adapter.fetch_library_media_page(
+          rating_key: rating_key,
+          start: start,
+          length: length
+        )
       end
 
       def library_mapping_state_for(integration)

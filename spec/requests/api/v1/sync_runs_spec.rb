@@ -151,7 +151,7 @@ RSpec.describe "Api::V1::SyncRuns", type: :request do
       expect(response.parsed_body.dig("error", "details", "fields", "cursor")).to eq([ "must be a positive integer" ])
     end
 
-    it "includes additive enrichment observability counters in mapping phase counts" do
+    it "includes additive mapping observability counters in mapping phase counts" do
       sign_in_operator!
       create_completed_mapping_profile_sync_run!
 
@@ -159,6 +159,7 @@ RSpec.describe "Api::V1::SyncRuns", type: :request do
 
       mapping_counts = response.parsed_body.dig("sync_runs", 0, "phase_counts", "tautulli_library_mapping")
       expect(mapping_counts).to include(expected_mapping_enrichment_counter_payload)
+      expect(mapping_counts).to include(expected_mapping_observability_counter_payload)
     end
   end
 
@@ -186,6 +187,7 @@ RSpec.describe "Api::V1::SyncRuns", type: :request do
         "profile_scheduled_integrations" => 2
       )
       expect(mapping_counts).to include(expected_mapping_enrichment_counter_payload)
+      expect(mapping_counts).to include(expected_mapping_observability_counter_payload)
     end
 
     it "returns not_found for missing sync runs" do
@@ -216,6 +218,7 @@ RSpec.describe "Api::V1::SyncRuns", type: :request do
           "profile_bootstrap_integrations" => 1,
           "profile_scheduled_integrations" => 2
         }.merge(expected_mapping_enrichment_counter_payload)
+          .merge(expected_mapping_observability_counter_payload)
       }
     )
   end
@@ -231,6 +234,34 @@ RSpec.describe "Api::V1::SyncRuns", type: :request do
       "enrichment_episode_fallback_get_metadata_attempted" => 5,
       "enrichment_episode_fallback_get_metadata_skipped" => 2,
       "enrichment_episode_fallback_get_metadata_failed" => 1
+    }
+  end
+
+  def expected_mapping_observability_counter_payload
+    {
+      "mapping_total_duration_ms" => 210,
+      "discovery_duration_ms" => 60,
+      "discovery_library_page_calls" => 2,
+      "discovery_tv_child_page_calls" => 5,
+      "discovery_tv_show_expansions" => 2,
+      "discovery_tv_season_expansions" => 3,
+      "discovery_tv_rows_emitted" => 7,
+      "metadata_recheck_duration_ms" => 70,
+      "recheck_watchable_metadata_cache_hits" => 4,
+      "recheck_watchable_metadata_cache_misses" => 5,
+      "recheck_show_metadata_cache_hits" => 6,
+      "recheck_show_metadata_cache_misses" => 7,
+      "recheck_budget_exhausted_rows" => 1,
+      "tv_structure_duration_ms" => 80,
+      "tv_structure_series_rating_key_queries" => 1,
+      "tv_structure_series_external_id_queries" => 2,
+      "tv_structure_season_queries" => 3,
+      "tv_structure_episode_queries" => 4,
+      "tv_structure_series_rating_key_cache_hits" => 5,
+      "tv_structure_series_external_id_cache_hits" => 6,
+      "tv_structure_season_cache_hits" => 7,
+      "tv_structure_episode_cache_hits" => 8,
+      "persistence_duration_ms" => 90
     }
   end
 

@@ -201,8 +201,15 @@ class Integration < ApplicationRecord
       libraries_count: libraries.size,
       active_cursors_count: active_cursors_count,
       completed_cycles: completed_cycles,
-      last_run_at: state["last_run_at"]
+      last_run_at: state["last_run_at"],
+      last_run_telemetry: normalized_last_run_telemetry(state["last_run_telemetry"])
     }
+  end
+
+  def normalized_last_run_telemetry(value)
+    return nil unless value.is_a?(Hash)
+
+    value.deep_symbolize_keys
   end
 
   def normalize_name_and_base_url

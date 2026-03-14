@@ -58,16 +58,26 @@ module Sync
         "enrichment_#{source_context}_#{endpoint_context}_#{outcome}".to_sym
       end
 
-      def initialize(integration:, adapter:, profile:, phase_progress: nil, tv_structure_resolver:, diagnostics_and_persistence:)
+      def initialize(
+        integration:,
+        adapter:,
+        profile:,
+        telemetry: Sync::TautulliLibraryMapping::Telemetry.new,
+        phase_progress: nil,
+        tv_structure_resolver:,
+        diagnostics_and_persistence:
+      )
         @integration = integration
         @profile = profile
+        @telemetry = telemetry
         @phase_progress = phase_progress
         @tv_structure_resolver = tv_structure_resolver
         @diagnostics_and_persistence = diagnostics_and_persistence
         @metadata_rechecker = Sync::TautulliLibraryMapping::MetadataRechecker.new(
           adapter: adapter,
           integration: integration,
-          profile: profile
+          profile: profile,
+          telemetry: telemetry
         )
       end
 
@@ -195,7 +205,8 @@ module Sync
 
       private
 
-      attr_reader :diagnostics_and_persistence, :integration, :metadata_rechecker, :phase_progress, :profile, :tv_structure_resolver
+      attr_reader :diagnostics_and_persistence, :integration, :metadata_rechecker, :phase_progress, :profile, :telemetry,
+                  :tv_structure_resolver
 
       def build_path_lookup(rows:, canonical_mapper:)
         paths = rows.filter_map do |row|
