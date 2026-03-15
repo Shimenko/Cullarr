@@ -328,18 +328,7 @@ module Candidates
       Season
         .joins(series: :integration)
         .where(integrations: { kind: "sonarr" })
-        .includes(
-          { series: :integration },
-          :keep_markers,
-          {
-            episodes: [
-              :integration,
-              :watch_stats,
-              :keep_markers,
-              { media_files: :integration }
-            ]
-          }
-        )
+        .includes(series: :integration)
         .order(id: :desc)
     end
 
@@ -347,23 +336,7 @@ module Candidates
       Series
         .joins(:integration)
         .where(integrations: { kind: "sonarr" })
-        .includes(
-          :integration,
-          :keep_markers,
-          {
-            seasons: [
-              :keep_markers,
-              {
-                episodes: [
-                  :integration,
-                  :watch_stats,
-                  :keep_markers,
-                  { media_files: :integration }
-                ]
-              }
-            ]
-          }
-        )
+        .includes(:integration)
         .order(id: :desc)
     end
 
@@ -404,27 +377,25 @@ module Candidates
     end
 
     def fetch_season_rows(selected_user_ids:, include_blocked:, watched_match_mode:)
-      fetch_rows(
+      Candidates::TvRollupQuery.new(
+        query: self,
+        scope: "tv_season",
         relation: season_scope,
         selected_user_ids:,
         include_blocked:,
-        watched_match_mode:,
-        watched_prefilter_applied: false
-      ) do |season|
-        build_season_row(season, selected_user_ids:)
-      end
+        watched_match_mode:
+      ).call
     end
 
     def fetch_show_rows(selected_user_ids:, include_blocked:, watched_match_mode:)
-      fetch_rows(
+      Candidates::TvRollupQuery.new(
+        query: self,
+        scope: "tv_show",
         relation: show_scope,
         selected_user_ids:,
         include_blocked:,
-        watched_match_mode:,
-        watched_prefilter_applied: false
-      ) do |series|
-        build_show_row(series, selected_user_ids:)
-      end
+        watched_match_mode:
+      ).call
     end
 
     def apply_watched_prefilter(relation:, watchable_type:, selected_user_ids:, watched_match_mode:)
@@ -618,82 +589,6 @@ module Candidates
       }
     end
 
-    def build_season_row(season, selected_user_ids:)
-      snapshots = episode_snapshots_for(episodes: season.episodes.select { |episode| episode.media_files.any? }, selected_user_ids:)
-      media_files = snapshots.flat_map { |snapshot| snapshot[:media_files] }
-      watched_summary = watched_summary_for_rollup(snapshots:, selected_user_ids:)
-      reclaimable_bytes = media_files.sum(&:size_bytes)
-      episode_count = snapshots.size
-      eligible_episode_count = snapshots.count { |snapshot| snapshot[:eligible] }
-      rollup_mapping_payload = mapping_payload_for_rollup(snapshots:)
-
-      risk_flags = snapshots.flat_map { |snapshot| snapshot[:risk_flags] }.uniq
-      blocker_flags = snapshots.flat_map { |snapshot| snapshot[:blocker_flags] }.uniq
-      blocker_flags << "rollup_not_strictly_eligible" if eligible_episode_count != episode_count
-
-      {
-        id: "season:#{season.id}",
-        candidate_id: "season:#{season.id}",
-        scope: "tv_season",
-        title: season_title(season),
-        integration_chips: integration_chips_for(fallback_integration: season.series.integration, media_files:),
-        reclaimable_bytes: reclaimable_bytes,
-        watched_summary: watched_summary,
-        mapping_status: rollup_mapping_payload.fetch(:mapping_status),
-        mapping_diagnostics: rollup_mapping_payload.fetch(:mapping_diagnostics),
-        risk_flags: risk_flags,
-        blocker_flags: blocker_flags.uniq,
-        reasons: reasons_for(added_at: season.created_at, watched_summary:, reclaimable_bytes:),
-        season_id: season.id,
-        series_id: season.series_id,
-        season_number: season.season_number,
-        episode_count: episode_count,
-        eligible_episode_count: eligible_episode_count,
-        media_file_ids: media_files.map(&:id),
-        multi_version_groups: multi_version_groups_for_snapshots(snapshots:)
-      }
-    end
-
-    def build_show_row(series, selected_user_ids:)
-      episodes = series.seasons.flat_map(&:episodes).select { |episode| episode.media_files.any? }
-      snapshots = episode_snapshots_for(episodes:, selected_user_ids:)
-      media_files = snapshots.flat_map { |snapshot| snapshot[:media_files] }
-      watched_summary = watched_summary_for_rollup(snapshots:, selected_user_ids:)
-      reclaimable_bytes = media_files.sum(&:size_bytes)
-      episode_count = snapshots.size
-      eligible_episode_count = snapshots.count { |snapshot| snapshot[:eligible] }
-      rollup_mapping_payload = mapping_payload_for_rollup(snapshots:)
-
-      risk_flags = snapshots.flat_map { |snapshot| snapshot[:risk_flags] }.uniq
-      blocker_flags = snapshots.flat_map { |snapshot| snapshot[:blocker_flags] }.uniq
-      blocker_flags << "rollup_not_strictly_eligible" if eligible_episode_count != episode_count
-
-      {
-        id: "show:#{series.id}",
-        candidate_id: "show:#{series.id}",
-        scope: "tv_show",
-        title: series.title,
-        integration_chips: integration_chips_for(fallback_integration: series.integration, media_files:),
-        reclaimable_bytes: reclaimable_bytes,
-        watched_summary: watched_summary,
-        mapping_status: rollup_mapping_payload.fetch(:mapping_status),
-        mapping_diagnostics: rollup_mapping_payload.fetch(:mapping_diagnostics),
-        risk_flags: risk_flags,
-        blocker_flags: blocker_flags.uniq,
-        reasons: reasons_for(
-          added_at: added_timestamp_for_watchable(watchable: series, fallback_timestamp: series.created_at),
-          watched_summary: watched_summary,
-          reclaimable_bytes: reclaimable_bytes
-        ),
-        series_id: series.id,
-        season_count: series.seasons.size,
-        episode_count: episode_count,
-        eligible_episode_count: eligible_episode_count,
-        media_file_ids: media_files.map(&:id),
-        multi_version_groups: multi_version_groups_for_snapshots(snapshots:)
-      }
-    end
-
     def multi_version_groups_for_movie(movie:, media_files:)
       return {} unless media_files.size > 1
 
@@ -713,10 +608,6 @@ module Candidates
 
         groups["episode:#{snapshot.fetch(:episode).id}"] = media_file_ids
       end
-    end
-
-    def episode_snapshots_for(episodes:, selected_user_ids:)
-      episodes.map { |episode| episode_snapshot(episode, selected_user_ids:) }
     end
 
     def episode_snapshot(episode, selected_user_ids:)

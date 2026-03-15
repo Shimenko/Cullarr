@@ -1271,6 +1271,446 @@ RSpec.describe Candidates::Query, type: :service do
 
       expect(integration_select_count).to be <= 2
     end
+
+    it "keeps the season base scope parent-only" do
+      query = described_class.new(
+        scope: "tv_season",
+        plex_user_ids: [],
+        include_blocked: true,
+        watched_match_mode: "none",
+        cursor: nil,
+        limit: nil
+      )
+
+      expect(query.send(:season_scope).includes_values).to contain_exactly({ series: :integration })
+    end
+
+    it "keeps the show base scope parent-only" do
+      query = described_class.new(
+        scope: "tv_show",
+        plex_user_ids: [],
+        include_blocked: true,
+        watched_match_mode: "none",
+        cursor: nil,
+        limit: nil
+      )
+
+      expect(query.send(:show_scope).includes_values).to contain_exactly(:integration)
+    end
+
+    it "loads season rollup child tables in bounded batch queries" do
+      integration = create_sonarr_integration!(name: "Sonarr Season Batch", host: "season-batch")
+      user = PlexUser.create!(tautulli_user_id: 9106, friendly_name: "Season Batch User", is_hidden: false)
+
+      5.times do |index|
+        series = Series.create!(integration: integration, sonarr_series_id: 40_000 + index, title: "Season Batch Series #{index}")
+        season = Season.create!(series: series, season_number: 1)
+        episode = Episode.create!(
+          season: season,
+          integration: integration,
+          sonarr_episode_id: 41_000 + index,
+          episode_number: 1,
+          duration_ms: 100_000
+        )
+        MediaFile.create!(
+          attachable: episode,
+          integration: integration,
+          arr_file_id: 42_000 + index,
+          path: "/media/tv/season-batch-#{index}.mkv",
+          path_canonical: "/media/tv/season-batch-#{index}.mkv",
+          size_bytes: 1.gigabyte
+        )
+        WatchStat.create!(plex_user: user, watchable: episode, play_count: 1)
+        KeepMarker.create!(keepable: season, note: "Season batch marker #{index}") if index.zero?
+      end
+
+      sql_statements = capture_select_sql do
+        result = described_class.new(
+          scope: "tv_season",
+          plex_user_ids: [ user.id ],
+          include_blocked: true,
+          watched_match_mode: "all",
+          cursor: nil,
+          limit: 4
+        ).call
+
+        expect(result.items.size).to eq(4)
+      end
+
+      expect(select_query_count(sql_statements, "episodes")).to eq(1)
+      expect(select_query_count(sql_statements, "media_files")).to be <= 2
+      expect(select_query_count(sql_statements, "watch_stats")).to eq(2)
+      expect(select_query_count(sql_statements, "keep_markers")).to eq(1)
+    end
+
+    it "loads show rollup child tables in bounded batch queries for the current parent batch" do
+      integration = create_sonarr_integration!(name: "Sonarr Show Batch", host: "show-batch")
+      user = PlexUser.create!(tautulli_user_id: 9107, friendly_name: "Show Batch User", is_hidden: false)
+
+      5.times do |index|
+        series = Series.create!(integration: integration, sonarr_series_id: 50_000 + index, title: "Show Batch Series #{index}")
+        season = Season.create!(series: series, season_number: 1)
+        episode = Episode.create!(
+          season: season,
+          integration: integration,
+          sonarr_episode_id: 51_000 + index,
+          episode_number: 1,
+          duration_ms: 100_000
+        )
+        MediaFile.create!(
+          attachable: episode,
+          integration: integration,
+          arr_file_id: 52_000 + index,
+          path: "/media/tv/show-batch-#{index}.mkv",
+          path_canonical: "/media/tv/show-batch-#{index}.mkv",
+          size_bytes: 1.gigabyte
+        )
+        WatchStat.create!(plex_user: user, watchable: episode, play_count: 1)
+        KeepMarker.create!(keepable: series, note: "Show batch marker #{index}") if index.zero?
+      end
+
+      sql_statements = capture_select_sql do
+        result = described_class.new(
+          scope: "tv_show",
+          plex_user_ids: [ user.id ],
+          include_blocked: true,
+          watched_match_mode: "all",
+          cursor: nil,
+          limit: 4
+        ).call
+
+        expect(result.items.size).to eq(4)
+      end
+
+      expect(select_query_count(sql_statements, "seasons")).to eq(1)
+      expect(select_query_count(sql_statements, "episodes")).to eq(1)
+      expect(select_query_count(sql_statements, "media_files")).to be <= 2
+      expect(select_query_count(sql_statements, "watch_stats")).to eq(2)
+      expect(select_query_count(sql_statements, "keep_markers")).to eq(1)
+    end
+
+    it "keeps season rollup last_watched_at sourced from all users even when a subset is selected" do
+      integration = create_sonarr_integration!(name: "Sonarr Season Last Watched", host: "season-last-watched")
+      selected_user = PlexUser.create!(tautulli_user_id: 9110, friendly_name: "Selected Season User", is_hidden: false)
+      other_user = PlexUser.create!(tautulli_user_id: 9111, friendly_name: "Other Season User", is_hidden: false)
+      series = Series.create!(integration: integration, sonarr_series_id: 80_001, title: "Season Last Watched")
+      season = Season.create!(series: series, season_number: 1)
+      episode = Episode.create!(
+        season: season,
+        integration: integration,
+        sonarr_episode_id: 81_001,
+        episode_number: 1,
+        duration_ms: 100_000
+      )
+      MediaFile.create!(
+        attachable: episode,
+        integration: integration,
+        arr_file_id: 82_001,
+        path: "/media/tv/season-last-watched.mkv",
+        path_canonical: "/media/tv/season-last-watched.mkv",
+        size_bytes: 1.gigabyte
+      )
+      WatchStat.create!(plex_user: selected_user, watchable: episode, play_count: 1, last_watched_at: 7.days.ago)
+      WatchStat.create!(plex_user: other_user, watchable: episode, play_count: 1, last_watched_at: 2.days.ago)
+
+      result = described_class.new(
+        scope: "tv_season",
+        plex_user_ids: [ selected_user.id ],
+        include_blocked: true,
+        watched_match_mode: "all",
+        cursor: nil,
+        limit: nil
+      ).call
+
+      row = result.items.find { |item| item[:candidate_id] == "season:#{season.id}" }
+      expect(row.dig(:watched_summary, :last_watched_at)).to be_within(1.second).of(2.days.ago)
+      expect(row[:reasons]).to include("last_watched_days_ago:2")
+    end
+
+    it "keeps show rollup last_watched_at sourced from all users even when a subset is selected" do
+      integration = create_sonarr_integration!(name: "Sonarr Show Last Watched", host: "show-last-watched")
+      selected_user = PlexUser.create!(tautulli_user_id: 9112, friendly_name: "Selected Show User", is_hidden: false)
+      other_user = PlexUser.create!(tautulli_user_id: 9113, friendly_name: "Other Show User", is_hidden: false)
+      series = Series.create!(integration: integration, sonarr_series_id: 90_001, title: "Show Last Watched")
+      season = Season.create!(series: series, season_number: 1)
+      episode = Episode.create!(
+        season: season,
+        integration: integration,
+        sonarr_episode_id: 91_001,
+        episode_number: 1,
+        duration_ms: 100_000
+      )
+      MediaFile.create!(
+        attachable: episode,
+        integration: integration,
+        arr_file_id: 92_001,
+        path: "/media/tv/show-last-watched.mkv",
+        path_canonical: "/media/tv/show-last-watched.mkv",
+        size_bytes: 1.gigabyte
+      )
+      WatchStat.create!(plex_user: selected_user, watchable: episode, play_count: 1, last_watched_at: 9.days.ago)
+      WatchStat.create!(plex_user: other_user, watchable: episode, play_count: 1, last_watched_at: 3.days.ago)
+
+      result = described_class.new(
+        scope: "tv_show",
+        plex_user_ids: [ selected_user.id ],
+        include_blocked: true,
+        watched_match_mode: "all",
+        cursor: nil,
+        limit: nil
+      ).call
+
+      row = result.items.find { |item| item[:candidate_id] == "show:#{series.id}" }
+      expect(row.dig(:watched_summary, :last_watched_at)).to be_within(1.second).of(3.days.ago)
+      expect(row[:reasons]).to include("last_watched_days_ago:3")
+    end
+
+    it "preserves season pagination diagnostics with mixed watched and blocked parents" do
+      integration = create_sonarr_integration!(name: "Sonarr Season Pagination", host: "season-pagination")
+      user = PlexUser.create!(tautulli_user_id: 9108, friendly_name: "Season Pagination User", is_hidden: false)
+
+      second_returned_series = Series.create!(integration: integration, sonarr_series_id: 60_004, title: "Older Season Series")
+      second_returned_season = Season.create!(series: second_returned_series, season_number: 1)
+      second_returned_episode = Episode.create!(
+        season: second_returned_season,
+        integration: integration,
+        sonarr_episode_id: 61_004,
+        episode_number: 1,
+        duration_ms: 100_000
+      )
+      MediaFile.create!(
+        attachable: second_returned_episode,
+        integration: integration,
+        arr_file_id: 62_004,
+        path: "/media/tv/season-pagination-older.mkv",
+        path_canonical: "/media/tv/season-pagination-older.mkv",
+        size_bytes: 1.gigabyte
+      )
+      WatchStat.create!(plex_user: user, watchable: second_returned_episode, play_count: 1)
+
+      first_returned_series = Series.create!(integration: integration, sonarr_series_id: 60_003, title: "Returned Season Series")
+      first_returned_season = Season.create!(series: first_returned_series, season_number: 1)
+      first_returned_episode = Episode.create!(
+        season: first_returned_season,
+        integration: integration,
+        sonarr_episode_id: 61_003,
+        episode_number: 1,
+        duration_ms: 100_000
+      )
+      MediaFile.create!(
+        attachable: first_returned_episode,
+        integration: integration,
+        arr_file_id: 62_003,
+        path: "/media/tv/season-pagination-returned.mkv",
+        path_canonical: "/media/tv/season-pagination-returned.mkv",
+        size_bytes: 1.gigabyte
+      )
+      WatchStat.create!(plex_user: user, watchable: first_returned_episode, play_count: 1)
+
+      blocked_series = Series.create!(integration: integration, sonarr_series_id: 60_002, title: "Blocked Season Series")
+      blocked_season = Season.create!(series: blocked_series, season_number: 1)
+      blocked_episode = Episode.create!(
+        season: blocked_season,
+        integration: integration,
+        sonarr_episode_id: 61_002,
+        episode_number: 1,
+        duration_ms: 100_000
+      )
+      MediaFile.create!(
+        attachable: blocked_episode,
+        integration: integration,
+        arr_file_id: 62_002,
+        path: "/media/tv/season-pagination-blocked.mkv",
+        path_canonical: "/media/tv/season-pagination-blocked.mkv",
+        size_bytes: 1.gigabyte
+      )
+      WatchStat.create!(
+        plex_user: user,
+        watchable: blocked_episode,
+        play_count: 1,
+        in_progress: true,
+        max_view_offset_ms: 1_000
+      )
+
+      newest_series = Series.create!(integration: integration, sonarr_series_id: 60_001, title: "Newest Season Series")
+      newest_season = Season.create!(series: newest_series, season_number: 1)
+      newest_episode = Episode.create!(
+        season: newest_season,
+        integration: integration,
+        sonarr_episode_id: 61_001,
+        episode_number: 1,
+        duration_ms: 100_000
+      )
+      MediaFile.create!(
+        attachable: newest_episode,
+        integration: integration,
+        arr_file_id: 62_001,
+        path: "/media/tv/season-pagination-newest.mkv",
+        path_canonical: "/media/tv/season-pagination-newest.mkv",
+        size_bytes: 1.gigabyte
+      )
+      WatchStat.create!(plex_user: user, watchable: newest_episode, play_count: 0)
+
+      first_page = described_class.new(
+        scope: "tv_season",
+        plex_user_ids: [ user.id ],
+        include_blocked: false,
+        watched_match_mode: "all",
+        cursor: nil,
+        limit: 1
+      ).call
+
+      expect(first_page.items.map { |row| row[:candidate_id] }).to eq([ "season:#{first_returned_season.id}" ])
+      expect(first_page.next_cursor).to eq(first_returned_season.id)
+      expect(first_page.diagnostics).to include(
+        watched_match_mode: "all",
+        watched_prefilter_applied: false,
+        rows_scanned: 3,
+        rows_filtered_unwatched: 1,
+        rows_filtered_blocked: 1,
+        rows_returned: 1
+      )
+
+      second_page = described_class.new(
+        scope: "tv_season",
+        plex_user_ids: [ user.id ],
+        include_blocked: false,
+        watched_match_mode: "all",
+        cursor: first_page.next_cursor,
+        limit: 1
+      ).call
+
+      expect(second_page.items.map { |row| row[:candidate_id] }).to eq([ "season:#{second_returned_season.id}" ])
+      expect(second_page.diagnostics).to include(
+        watched_match_mode: "all",
+        watched_prefilter_applied: false,
+        rows_scanned: 1,
+        rows_filtered_unwatched: 0,
+        rows_filtered_blocked: 0,
+        rows_returned: 1
+      )
+    end
+
+    it "preserves show pagination diagnostics with mixed watched and blocked parents" do
+      integration = create_sonarr_integration!(name: "Sonarr Show Pagination", host: "show-pagination")
+      user = PlexUser.create!(tautulli_user_id: 9109, friendly_name: "Show Pagination User", is_hidden: false)
+
+      second_returned_series = Series.create!(integration: integration, sonarr_series_id: 70_004, title: "Older Show")
+      second_returned_season = Season.create!(series: second_returned_series, season_number: 1)
+      second_returned_episode = Episode.create!(
+        season: second_returned_season,
+        integration: integration,
+        sonarr_episode_id: 71_004,
+        episode_number: 1,
+        duration_ms: 100_000
+      )
+      MediaFile.create!(
+        attachable: second_returned_episode,
+        integration: integration,
+        arr_file_id: 72_004,
+        path: "/media/tv/show-pagination-older.mkv",
+        path_canonical: "/media/tv/show-pagination-older.mkv",
+        size_bytes: 1.gigabyte
+      )
+      WatchStat.create!(plex_user: user, watchable: second_returned_episode, play_count: 1)
+
+      first_returned_series = Series.create!(integration: integration, sonarr_series_id: 70_003, title: "Returned Show")
+      first_returned_season = Season.create!(series: first_returned_series, season_number: 1)
+      first_returned_episode = Episode.create!(
+        season: first_returned_season,
+        integration: integration,
+        sonarr_episode_id: 71_003,
+        episode_number: 1,
+        duration_ms: 100_000
+      )
+      MediaFile.create!(
+        attachable: first_returned_episode,
+        integration: integration,
+        arr_file_id: 72_003,
+        path: "/media/tv/show-pagination-returned.mkv",
+        path_canonical: "/media/tv/show-pagination-returned.mkv",
+        size_bytes: 1.gigabyte
+      )
+      WatchStat.create!(plex_user: user, watchable: first_returned_episode, play_count: 1)
+
+      blocked_series = Series.create!(integration: integration, sonarr_series_id: 70_002, title: "Blocked Show")
+      blocked_season = Season.create!(series: blocked_series, season_number: 1)
+      blocked_episode = Episode.create!(
+        season: blocked_season,
+        integration: integration,
+        sonarr_episode_id: 71_002,
+        episode_number: 1,
+        duration_ms: 100_000
+      )
+      MediaFile.create!(
+        attachable: blocked_episode,
+        integration: integration,
+        arr_file_id: 72_002,
+        path: "/media/tv/show-pagination-blocked.mkv",
+        path_canonical: "/media/tv/show-pagination-blocked.mkv",
+        size_bytes: 1.gigabyte
+      )
+      KeepMarker.create!(keepable: blocked_series, note: "Blocked show")
+      WatchStat.create!(plex_user: user, watchable: blocked_episode, play_count: 1)
+
+      newest_series = Series.create!(integration: integration, sonarr_series_id: 70_001, title: "Newest Show")
+      newest_season = Season.create!(series: newest_series, season_number: 1)
+      newest_episode = Episode.create!(
+        season: newest_season,
+        integration: integration,
+        sonarr_episode_id: 71_001,
+        episode_number: 1,
+        duration_ms: 100_000
+      )
+      MediaFile.create!(
+        attachable: newest_episode,
+        integration: integration,
+        arr_file_id: 72_001,
+        path: "/media/tv/show-pagination-newest.mkv",
+        path_canonical: "/media/tv/show-pagination-newest.mkv",
+        size_bytes: 1.gigabyte
+      )
+      WatchStat.create!(plex_user: user, watchable: newest_episode, play_count: 0)
+
+      first_page = described_class.new(
+        scope: "tv_show",
+        plex_user_ids: [ user.id ],
+        include_blocked: false,
+        watched_match_mode: "all",
+        cursor: nil,
+        limit: 1
+      ).call
+
+      expect(first_page.items.map { |row| row[:candidate_id] }).to eq([ "show:#{first_returned_series.id}" ])
+      expect(first_page.next_cursor).to eq(first_returned_series.id)
+      expect(first_page.diagnostics).to include(
+        watched_match_mode: "all",
+        watched_prefilter_applied: false,
+        rows_scanned: 3,
+        rows_filtered_unwatched: 1,
+        rows_filtered_blocked: 1,
+        rows_returned: 1
+      )
+
+      second_page = described_class.new(
+        scope: "tv_show",
+        plex_user_ids: [ user.id ],
+        include_blocked: false,
+        watched_match_mode: "all",
+        cursor: first_page.next_cursor,
+        limit: 1
+      ).call
+
+      expect(second_page.items.map { |row| row[:candidate_id] }).to eq([ "show:#{second_returned_series.id}" ])
+      expect(second_page.diagnostics).to include(
+        watched_match_mode: "all",
+        watched_prefilter_applied: false,
+        rows_scanned: 1,
+        rows_filtered_unwatched: 0,
+        rows_filtered_blocked: 0,
+        rows_returned: 1
+      )
+    end
   end
 
   def create_integration!(name:, host:)
@@ -1278,6 +1718,16 @@ RSpec.describe Candidates::Query, type: :service do
       kind: "radarr",
       name: name,
       base_url: "https://radarr.#{host}.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+  end
+
+  def create_sonarr_integration!(name:, host:)
+    Integration.create!(
+      kind: "sonarr",
+      name: name,
+      base_url: "https://sonarr.#{host}.local",
       api_key: "secret",
       verify_ssl: true
     )
@@ -1318,6 +1768,10 @@ RSpec.describe Candidates::Query, type: :service do
     end
 
     statements
+  end
+
+  def select_query_count(statements, table_name)
+    statements.count { |sql| sql.match?(/\b(?:FROM|JOIN)\s+\"?#{Regexp.escape(table_name)}\"?\b/i) }
   end
 end
 # rubocop:enable RSpec/ExampleLength
