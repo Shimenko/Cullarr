@@ -51,20 +51,20 @@ module Sync
         measure(:persistence_duration_ms, &block)
       end
 
-      def increment_discovery_library_page_calls
-        increment(:discovery_library_page_calls)
+      def increment_discovery_library_page_calls(by: 1)
+        increment(:discovery_library_page_calls, by:)
       end
 
-      def increment_discovery_tv_child_page_calls
-        increment(:discovery_tv_child_page_calls)
+      def increment_discovery_tv_child_page_calls(by: 1)
+        increment(:discovery_tv_child_page_calls, by:)
       end
 
-      def increment_discovery_tv_show_expansions
-        increment(:discovery_tv_show_expansions)
+      def increment_discovery_tv_show_expansions(by: 1)
+        increment(:discovery_tv_show_expansions, by:)
       end
 
-      def increment_discovery_tv_season_expansions
-        increment(:discovery_tv_season_expansions)
+      def increment_discovery_tv_season_expansions(by: 1)
+        increment(:discovery_tv_season_expansions, by:)
       end
 
       def increment_discovery_tv_rows_emitted(by: 1)

@@ -18,6 +18,7 @@ module Sync
         integration:,
         adapter:,
         libraries:,
+        worker_count: 1,
         telemetry: Sync::TautulliLibraryMapping::Telemetry.new,
         last_run_telemetry_builder: nil,
         phase_progress: nil,
@@ -26,6 +27,7 @@ module Sync
         @integration = integration
         @adapter = adapter
         @libraries = libraries
+        @worker_count = worker_count.to_i
         @telemetry = telemetry
         @last_run_telemetry_builder = last_run_telemetry_builder
         @phase_progress = phase_progress
@@ -39,7 +41,8 @@ module Sync
 
       private
 
-      attr_reader :adapter, :integration, :last_run_telemetry_builder, :libraries, :phase_progress, :row_processor, :telemetry
+      attr_reader :adapter, :integration, :last_run_telemetry_builder, :libraries, :phase_progress, :row_processor, :telemetry,
+                  :worker_count
 
       def perform_call
         counts = self.class.counts_template
@@ -181,80 +184,46 @@ module Sync
           start: start,
           length: length
         )
-        rows = []
         raw_rows_count = page.fetch(:raw_rows_count, 0).to_i
         rows_skipped_invalid = page.fetch(:rows_skipped_invalid, 0).to_i
-        traversal_stack = []
+        row_groups = Array.new(page.fetch(:rows).size)
+        direct_rows_emitted = 0
+        branch_rows = []
+        branch_indexes = []
 
-        page.fetch(:rows).reverse_each do |row|
-          traversal_stack << {
-            frame_type: :row,
-            row: row,
-            depth: 0
-          }
+        page.fetch(:rows).each_with_index do |row, index|
+          case row[:media_type].to_s
+          when "episode", "movie"
+            row_groups[index] = [ row ]
+            direct_rows_emitted += 1
+          when "show", "season"
+            rating_key = row[:plex_rating_key].to_s.strip.presence
+            if rating_key.blank?
+              rows_skipped_invalid += 1
+              next
+            end
+
+            branch_rows << row
+            branch_indexes << index
+          else
+            rows_skipped_invalid += 1
+          end
         end
 
-        until traversal_stack.empty?
-          frame = traversal_stack.pop
-          if frame.fetch(:frame_type) == :row
-            row = frame.fetch(:row)
-            depth = frame.fetch(:depth)
-            next if depth > 2
+        telemetry.increment_discovery_tv_rows_emitted(by: direct_rows_emitted)
 
-            case row[:media_type].to_s
-            when "episode", "movie"
-              rows << row
-              telemetry.increment_discovery_tv_rows_emitted
-            when "show", "season"
-              rating_key = row[:plex_rating_key].to_s.strip.presence
-              if rating_key.blank?
-                rows_skipped_invalid += 1
-                next
-              end
-
-              telemetry.increment_discovery_tv_show_expansions if row[:media_type].to_s == "show"
-              telemetry.increment_discovery_tv_season_expansions if row[:media_type].to_s == "season"
-
-              traversal_stack << {
-                frame_type: :page,
-                rating_key: rating_key,
-                start: 0,
-                child_depth: depth + 1
-              }
-            else
-              rows_skipped_invalid += 1
-            end
-            next
-          end
-
-          child_page = fetch_library_media_page_for_child(
-            rating_key: frame.fetch(:rating_key),
-            start: frame.fetch(:start),
-            length: length
-          )
-          raw_rows_count += child_page.fetch(:raw_rows_count, 0).to_i
-          rows_skipped_invalid += child_page.fetch(:rows_skipped_invalid, 0).to_i
-
-          if child_page.fetch(:has_more)
-            traversal_stack << {
-              frame_type: :page,
-              rating_key: frame.fetch(:rating_key),
-              start: child_page.fetch(:next_start).to_i,
-              child_depth: frame.fetch(:child_depth)
-            }
-          end
-
-          child_page.fetch(:rows).reverse_each do |child_row|
-            traversal_stack << {
-              frame_type: :row,
-              row: child_row,
-              depth: frame.fetch(:child_depth)
-            }
-          end
+        tv_branch_expander_for(length:).expand(root_rows: branch_rows).each_with_index do |result, branch_index|
+          row_groups[branch_indexes.fetch(branch_index)] = result.fetch(:rows)
+          raw_rows_count += result.fetch(:raw_rows_count)
+          rows_skipped_invalid += result.fetch(:rows_skipped_invalid)
+          telemetry.increment_discovery_tv_child_page_calls(by: result.fetch(:child_page_calls))
+          telemetry.increment_discovery_tv_show_expansions(by: result.fetch(:show_expansions))
+          telemetry.increment_discovery_tv_season_expansions(by: result.fetch(:season_expansions))
+          telemetry.increment_discovery_tv_rows_emitted(by: result.fetch(:tv_rows_emitted))
         end
 
         {
-          rows: rows,
+          rows: row_groups.compact.flatten(1),
           raw_rows_count: raw_rows_count,
           rows_skipped_invalid: rows_skipped_invalid,
           records_total: page.fetch(:records_total),
@@ -307,13 +276,16 @@ module Sync
         )
       end
 
-      def fetch_library_media_page_for_child(rating_key:, start:, length:)
-        telemetry.increment_discovery_tv_child_page_calls
-        adapter.fetch_library_media_page(
-          rating_key: rating_key,
-          start: start,
-          length: length
-        )
+      def tv_branch_expander_for(length:)
+        @tv_branch_expanders ||= {}
+        @tv_branch_expanders.fetch(length) do
+          @tv_branch_expanders[length] = Sync::TautulliLibraryMapping::TvBranchExpander.new(
+            integration: integration,
+            adapter: adapter,
+            worker_count: worker_count,
+            length: length
+          )
+        end
       end
 
       def library_mapping_state_for(integration)

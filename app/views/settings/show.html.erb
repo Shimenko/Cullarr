@@ -413,7 +413,7 @@
           type: :number,
           min: 0,
           max: 64,
-          help_text: "Set 0 for auto (CPU cores - 1, capped at 64).",
+          help_text: "Shared ceiling for Tautulli metadata sync, history metadata fetches, and library mapping discovery/recheck fetch concurrency. Set 0 for auto (CPU cores - 1, capped at 64).",
           autocomplete: "off",
           disabled: default_integration_kind != "tautulli"
         ) %>
@@ -541,7 +541,7 @@
                 type: :number,
                 min: 0,
                 max: 64,
-                help_text: "Set 0 for auto (CPU cores - 1, capped at 64).",
+                help_text: "Shared ceiling for Tautulli metadata sync, history metadata fetches, and library mapping discovery/recheck fetch concurrency. Set 0 for auto (CPU cores - 1, capped at 64).",
                 autocomplete: "off"
               ) %>
             <% end %>

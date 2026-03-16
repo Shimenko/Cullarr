@@ -3069,6 +3069,114 @@ RSpec.describe Sync::TautulliLibraryMappingSync, type: :service do
     expect(result[:metadata_recheck_failed]).to be <= result[:metadata_recheck_attempted]
   end
 
+  it "logs clamped mapping worker counts and falls back to serial fetch for single-task discovery and recheck work" do
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Mapping Worker Clamp",
+      base_url: "https://tautulli.mapping-worker-clamp.local",
+      api_key: "secret",
+      verify_ssl: true,
+      settings_json: {
+        "tautulli_metadata_workers" => 999
+      }
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 88, title: "Movies", section_type: "movie" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 88, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "movie",
+            title: "Single Recheck Row",
+            year: 2024,
+            plex_rating_key: "plex-single-recheck",
+            external_ids: {}
+          }
+        ],
+        raw_rows_count: 1,
+        rows_skipped_invalid: 0,
+        records_total: 1,
+        has_more: false,
+        next_start: 1
+      }
+    )
+    allow(adapter).to receive(:fetch_metadata).with(rating_key: "plex-single-recheck").and_return(nil)
+
+    allow(Rails.logger).to receive(:info)
+
+    result = described_class.new(sync_run:, correlation_id: "corr-library-worker-clamp").call
+
+    expect(result).to include(recheck_eligible_rows: 1, metadata_recheck_attempted: 1)
+    expect(Integrations::TautulliAdapter).to have_received(:new).with(integration: tautulli).once
+    expect(Rails.logger).to have_received(:info).with(
+      include(
+        "sync_phase_worker_integration_complete phase=tautulli_library_mapping",
+        "mapping_discovery_workers=8",
+        "mapping_recheck_workers=8"
+      )
+    )
+  end
+
+  it "aborts the integration when parallel discovery child fetch fails" do
+    tautulli = Integration.create!(
+      kind: "tautulli",
+      name: "Tautulli Parallel Discovery Failure",
+      base_url: "https://tautulli.parallel-discovery-failure.local",
+      api_key: "secret",
+      verify_ssl: true
+    )
+
+    health_check = instance_double(Integrations::HealthCheck, call: { status: "healthy" })
+    allow(Integrations::HealthCheck).to receive(:new).with(tautulli, raise_on_unsupported: true).and_return(health_check)
+
+    adapter = instance_double(Integrations::TautulliAdapter)
+    allow(Integrations::TautulliAdapter).to receive(:new).with(integration: tautulli).and_return(adapter)
+    allow(adapter).to receive(:fetch_libraries).and_return([ { library_id: 89, title: "TV", section_type: "show" } ])
+    allow(adapter).to receive(:fetch_library_media_page).with(library_id: 89, start: 0, length: 500).and_return(
+      {
+        rows: [
+          {
+            media_type: "show",
+            plex_rating_key: "plex-parallel-show-ok",
+            title: "Parallel OK"
+          },
+          {
+            media_type: "show",
+            plex_rating_key: "plex-parallel-show-fail",
+            title: "Parallel Fail"
+          }
+        ],
+        raw_rows_count: 2,
+        rows_skipped_invalid: 0,
+        records_total: 2,
+        has_more: false,
+        next_start: 2
+      }
+    )
+    allow(adapter).to receive(:fetch_library_media_page).with(rating_key: "plex-parallel-show-ok", start: 0, length: 500).and_return(
+      {
+        rows: [],
+        raw_rows_count: 0,
+        rows_skipped_invalid: 0,
+        records_total: 0,
+        has_more: false,
+        next_start: 0
+      }
+    )
+    allow(adapter).to receive(:fetch_library_media_page).with(rating_key: "plex-parallel-show-fail", start: 0, length: 500).and_raise(StandardError, "child branch failed")
+
+    expect do
+      described_class.new(sync_run:, correlation_id: "corr-library-parallel-discovery-failure").call
+    end.to raise_error(StandardError, "child branch failed")
+
+    expect(tautulli.reload.settings_json).not_to have_key("library_mapping_bootstrap_completed_at")
+  end
+
   it "persists marker and library mapping state in a single integration settings write" do
     tautulli = Integration.create!(
       kind: "tautulli",

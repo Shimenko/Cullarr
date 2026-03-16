@@ -29,6 +29,7 @@ module Sync
     ENRICHMENT_SOURCE_CONTEXT_SHOW = "show".freeze
     ENRICHMENT_SOURCE_CONTEXT_EPISODE_FALLBACK = "episode_fallback".freeze
     ENRICHMENT_OUTCOMES = %w[attempted skipped failed].freeze
+    MAPPING_PARALLEL_WORKER_CAP = 8
 
     def initialize(sync_run:, correlation_id:, phase_progress: nil)
       @sync_run = sync_run
@@ -54,11 +55,14 @@ module Sync
         libraries = adapter.fetch_libraries
         counts[:libraries_fetched] += libraries.size
         last_run_telemetry = nil
+        mapping_discovery_workers = clamped_mapping_worker_count_for(integration)
+        mapping_recheck_workers = clamped_mapping_worker_count_for(integration)
 
         discovery = Sync::TautulliLibraryMapping::DiscoveryTraversal.new(
           integration: integration,
           adapter: adapter,
           libraries: libraries,
+          worker_count: mapping_discovery_workers,
           telemetry: telemetry,
           last_run_telemetry_builder: lambda { |profile:, rows_fetched:, rows_processed:|
             last_run_telemetry = telemetry.last_run_telemetry_payload(
@@ -74,6 +78,7 @@ module Sync
               integration: integration,
               adapter: adapter,
               profile: discovery.profile,
+              worker_count: mapping_recheck_workers,
               telemetry: telemetry
             ).process(staged_rows:)
           }
@@ -94,6 +99,8 @@ module Sync
           "rows_mapped_by_external_ids=#{integration_counts[:rows_mapped_by_external_ids]} " \
           "rows_mapped_by_title_year=#{integration_counts[:rows_mapped_by_title_year]} " \
           "rows_ambiguous=#{integration_counts[:rows_ambiguous]} rows_unmapped=#{integration_counts[:rows_unmapped]} " \
+          "mapping_discovery_workers=#{mapping_discovery_workers} " \
+          "mapping_recheck_workers=#{mapping_recheck_workers} " \
           "profile_bootstrap_integrations=#{integration_counts[:profile_bootstrap_integrations]} " \
           "profile_scheduled_integrations=#{integration_counts[:profile_scheduled_integrations]} " \
           "watchables_updated=#{integration_counts[:watchables_updated]} " \
@@ -111,13 +118,14 @@ module Sync
 
     attr_reader :correlation_id, :phase_progress, :sync_run
 
-    def batch_matcher_for(integration:, adapter:, profile:, telemetry:)
+    def batch_matcher_for(integration:, adapter:, profile:, worker_count:, telemetry:)
       @batch_matchers ||= {}
       @batch_matchers.fetch(integration.id) do
         @batch_matchers[integration.id] = Sync::TautulliLibraryMapping::BatchMatcher.new(
           integration: integration,
           adapter: adapter,
           profile: profile,
+          worker_count: worker_count,
           telemetry: telemetry,
           phase_progress: phase_progress,
           tv_structure_resolver: Sync::TautulliLibraryMapping::TvStructureResolver.new(telemetry: telemetry),
@@ -148,6 +156,13 @@ module Sync
 
     def monotonic_now
       Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    end
+
+    def clamped_mapping_worker_count_for(integration)
+      [
+        integration.tautulli_metadata_workers_resolved,
+        MAPPING_PARALLEL_WORKER_CAP
+      ].min
     end
   end
 end

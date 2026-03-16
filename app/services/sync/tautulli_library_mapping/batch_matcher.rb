@@ -62,6 +62,7 @@ module Sync
         integration:,
         adapter:,
         profile:,
+        worker_count: 1,
         telemetry: Sync::TautulliLibraryMapping::Telemetry.new,
         phase_progress: nil,
         tv_structure_resolver:,
@@ -77,6 +78,7 @@ module Sync
           adapter: adapter,
           integration: integration,
           profile: profile,
+          worker_count: worker_count,
           telemetry: telemetry
         )
       end
@@ -111,21 +113,22 @@ module Sync
           }
         end
 
+        ordered_work_items = ordered_work_items_for(work_items:)
+        recheck_outcomes = metadata_rechecker.recheck_outcomes_for(
+          work_items: ordered_work_items,
+          canonical_mapper: canonical_mapper,
+          root_classifier: root_classifier,
+          context_builder: method(:row_context_for),
+          context_evaluator: ->(context) { evaluate_context(context: context) }
+        )
+
         pending_progress_rows = 0
-        ordered_work_items_for(work_items:).each do |work_item|
+        ordered_work_items.zip(recheck_outcomes).each do |work_item, outcome|
           row = work_item.fetch(:row)
           first_context = work_item.fetch(:first_context)
           first_evaluation = work_item.fetch(:first_evaluation)
 
           counts[:rows_processed] += 1
-          outcome = metadata_rechecker.recheck_outcome_for(
-            row: row,
-            first_evaluation: first_evaluation,
-            canonical_mapper: canonical_mapper,
-            root_classifier: root_classifier,
-            context_builder: method(:row_context_for),
-            context_evaluator: ->(context) { evaluate_context(context: context) }
-          )
 
           increment_recheck_counters!(counts:, first_status: first_evaluation.fetch(:status_code), outcome:)
 
