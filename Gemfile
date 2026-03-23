@@ -22,7 +22,7 @@ gem "faraday"
 gem "view_component"
 
 # Use Active Model has_secure_password [https://guides.rubyonrails.org/active_model_basics.html#securepassword]
-gem "bcrypt", "~> 3.1.7"
+gem "bcrypt", "~> 3.1.22"
 gem "pg", ">= 1.5"
 
 # Windows does not include zoneinfo files, so bundle the tzinfo-data gem
